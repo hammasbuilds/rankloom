@@ -1239,6 +1239,7 @@ class Handler(BaseHTTPRequestHandler):
         family = {
             "fellowship": "Fellowship / programme",
             "pakistan": "Pakistan public sector (CS/IT/AI)",
+            "platforms": "AI data work (contract)",
         }.get(self.query().get("with", ""))
         if family:
             extra = self._jr(jobradar_link.lens_family, family)
@@ -1246,6 +1247,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def jr_yc(self):
         self.send_json(200, self._jr(jobradar_link.yc, self.query()))
+
+    def jr_portfolio(self):
+        self.send_json(200, self._jr(jobradar_link.portfolio, self.query()))
 
     def jr_crawl(self):
         self.need_session()
@@ -1462,6 +1466,7 @@ ROUTES = {
     ("GET", "/api/jobradar/jobs"): Handler.jr_jobs,
     ("GET", "/api/jobradar/directory"): Handler.jr_directory,
     ("GET", "/api/jobradar/yc"): Handler.jr_yc,
+    ("GET", "/api/jobradar/portfolio"): Handler.jr_portfolio,
     ("POST", "/api/jobradar/crawl"): Handler.jr_crawl,
     ("POST", "/api/imports/delete"): Handler.import_delete,
 }

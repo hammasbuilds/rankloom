@@ -199,6 +199,30 @@ def build(home):
             ),
         ],
     )
+    conn.executescript("""
+        CREATE TABLE portfolio_programme (name TEXT PRIMARY KEY, kind TEXT, board TEXT,
+          companies INT, roles INT, ai_roles INT, junior_ai INT, failed TEXT, at TEXT);
+        CREATE TABLE portfolio_company (programme TEXT, slug TEXT, name TEXT, url TEXT,
+          roles INT, ai_roles INT, junior_ai INT, at TEXT);
+        CREATE TABLE portfolio_job (programme TEXT, company TEXT, title TEXT, url TEXT, ai INT,
+          junior INT, family TEXT, track TEXT, level TEXT, at TEXT);
+        INSERT INTO portfolio_programme VALUES
+          ('Antler', 'accelerator', 'https://careers.antler.co', 1, 1, 0, 0, '', 't'),
+          ('Techstars', 'accelerator', 'https://jobs.techstars.com', 2, 3, 2, 1, '', 't');
+        INSERT INTO portfolio_company VALUES
+          ('Techstars', 'helgen', 'Helgen', 'https://jobs.techstars.com/companies/helgen',
+           3, 2, 1, 't'),
+          ('Techstars', 'quiet', 'Quiet Labs', 'https://jobs.techstars.com/companies/quiet',
+           0, 0, 0, 't'),
+          ('Antler', 'solo', 'Solo', 'https://careers.antler.co/companies/solo', 1, 0, 0, 't');
+        INSERT INTO portfolio_job VALUES
+          ('Techstars', 'Helgen', 'Senior ML Engineer', 'https://j/1', 1, 0,
+           'Machine Learning', 'Engineer', 'senior', 't'),
+          ('Techstars', 'Helgen', 'Computer Vision Engineer', 'https://j/2', 1, 1,
+           'Computer Vision', 'Engineer', 'mid', 't'),
+          ('Techstars', 'Helgen', 'Account Executive', 'https://j/3', 0, 0, '', '', 'mid', 't'),
+          ('Antler', 'Solo', 'Founder Associate', 'https://j/4', 0, 0, '', '', 'mid', 't');
+    """)
     conn.execute(
         "INSERT INTO run VALUES (1, '2026-10-20T10:00:00+00:00', 100, 5, ?)",
         (json.dumps({"lines": ["100 fetched", "5 kept"]}),),
@@ -244,6 +268,24 @@ def test_directory_and_yc(radar):
     assert [r["slug"] for r in jr.yc({"batch": "Winter 2024"})["rows"]] == ["quiet"]
 
 
+def test_portfolios_open_on_the_most_ai_roles_and_list_only_ai_roles(radar):
+    p = jr.portfolio({})
+    assert p["programme"] == "Techstars" and [x["name"] for x in p["programmes"]][0] == "Techstars"
+    assert [r["title"] for r in p["roles"]] == ["Computer Vision Engineer", "Senior ML Engineer"]
+    assert [c["name"] for c in p["companies"]] == ["Helgen", "Quiet Labs"]  # no-role company kept
+    assert [r["title"] for r in jr.portfolio({"junior": "1"})["roles"]] == [
+        "Computer Vision Engineer"
+    ]
+    assert jr.portfolio({"q": "quiet"})["companies_matched"] == 1
+    assert [r["title"] for r in jr.portfolio({"family": "Computer Vision"})["roles"]] == [
+        "Computer Vision Engineer"
+    ]
+    assert dict(map(tuple, p["families"])) == {"Machine Learning": 1, "Computer Vision": 1}
+    antler = jr.portfolio({"programme": "Antler"})
+    assert antler["roles"] == [] and antler["companies"][0]["name"] == "Solo"
+    assert jr.portfolio({"programme": "Not a programme"})["programme"] == "Techstars"
+
+
 def test_the_database_is_opened_read_only(radar):
     conn = jr.connect()
     with pytest.raises(sqlite3.OperationalError):
@@ -270,7 +312,11 @@ def test_endpoints_need_a_session_and_serve_the_lists(radar, app):  # noqa: F811
     assert body["postings"][0]["company"] == "PITB"
     st, body, _ = c.get("/api/jobradar/status")
     assert body["connected"] and body["funnel"] == ["100 fetched", "5 kept"]
-    assert body["counts"]["lens"] == 5
+    assert body["counts"]["lens"] == 5 and body["counts"]["portfolio_company"] == 3
+    st, body, _ = c.get("/api/jobradar/directory?kind=AI%20work%20platform&with=platforms")
+    assert st == 200 and body["entries"][0]["name"] == "Mercor" and body["postings"] == []
+    st, body, _ = c.get("/api/jobradar/portfolio?programme=Antler")
+    assert st == 200 and body["programme"] == "Antler"
 
 
 def test_a_crawl_runs_job_radars_script_once_at_a_time(radar, app):  # noqa: F811

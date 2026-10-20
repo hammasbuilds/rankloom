@@ -45,6 +45,7 @@ CRAWLS = {
     "jobs": (["scripts/fetch.py"], "Job boards and APIs"),
     "yc": (["scripts/fetch_yc_recent.py"], "YC batches, last three years, with LinkedIn"),
     "boards": (["scripts/discover_boards.py"], "Find more company boards (long)"),
+    "portfolios": (["scripts/fetch_portfolios.py"], "Accelerator and investor portfolios"),
 }
 
 
@@ -225,6 +226,55 @@ def yc(f: dict) -> dict:
     }
 
 
+def portfolio(f: dict) -> dict:
+    """One accelerator's or investor's portfolio: its companies, and the AI roles they have open."""
+    conn = connect()
+    try:
+        _need(conn, "portfolio_programme")
+        programmes = [
+            dict(r)
+            for r in conn.execute("SELECT * FROM portfolio_programme ORDER BY ai_roles DESC, name")
+        ]
+        names = [p["name"] for p in programmes]
+        name = f.get("programme") if f.get("programme") in names else (names[0] if names else "")
+        q = f"%{(f.get('q') or '').strip().lower()}%"
+        # One row per company and title: big employers post the same title once per city.
+        roles_sql = (
+            "SELECT company, title, MIN(url) AS url, MAX(junior) AS junior, family, track, level,"
+            " COUNT(*) AS postings FROM portfolio_job WHERE programme = ? AND ai = 1"
+            + (" AND junior = 1" if f.get("junior") == "1" else "")
+            + (" AND family = ?" if f.get("family") else "")
+            + " AND lower(title || ' ' || company) LIKE ?"
+            " GROUP BY company, title ORDER BY junior DESC, company, title"
+        )
+        args = (name, f["family"], q) if f.get("family") else (name, q)
+        roles = [dict(r) for r in conn.execute(roles_sql, args)]
+        families = conn.execute(
+            "SELECT family, COUNT(*) FROM portfolio_job WHERE programme = ? AND ai = 1 "
+            "GROUP BY family ORDER BY COUNT(*) DESC",
+            (name,),
+        ).fetchall()
+        companies = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM portfolio_company WHERE programme = ? AND lower(name) LIKE ? "
+                "ORDER BY ai_roles DESC, roles DESC, name",
+                (name, q),
+            )
+        ]
+    finally:
+        conn.close()
+    return {
+        "programmes": programmes,
+        "programme": name,
+        "families": [list(r) for r in families],
+        "roles": roles[: LIMIT * 2],
+        "roles_matched": len(roles),
+        "companies": companies[: LIMIT * 2],
+        "companies_matched": len(companies),
+    }
+
+
 # --- status and crawling -----------------------------------------------------------------------
 
 
@@ -309,7 +359,7 @@ def status() -> dict:
             if row:
                 out["last_run"] = row["at"]
                 out["funnel"] = json.loads(row["funnel"]).get("lines", [])
-        for table in ("lens", "posting", "killed", "yc_recent", "directory"):
+        for table in ("lens", "posting", "killed", "yc_recent", "directory", "portfolio_company"):
             if table in tables:
                 out["counts"][table] = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
     finally:

@@ -145,7 +145,7 @@ ignores.
 ## Checks
 
 ```bash
-uv run pytest                      # 128 tests, no network: every engine, the HTTP API end to end, RFC 6238 vectors
+uv run pytest                      # 129 tests, no network: every engine, the HTTP API end to end, RFC 6238 vectors
 uv run ruff check . && uv run ruff format --check .
 uv run python scripts/ui_check.py  # headless Chrome: every sub-tool, Lead List, Clients, a report, 2-step, phone width
 ```

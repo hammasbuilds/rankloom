@@ -1082,6 +1082,14 @@
       postingsTable(d.postings, "No fellowship or residency postings in the last crawl.")));
   }
 
+  async function jrPlatforms(panel) {
+    const d = await jrDirectory(panel, "AI work platform", "AI work platforms",
+      "Contract and small-contract work training and checking AI models", "platforms");
+    if (d) panel.append(h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "AI training and evaluation roles open now" }),
+      h("p", { text: "Model evaluator, AI data trainer, annotator and similar posts found by the crawl" })),
+      postingsTable(d.postings, "No AI training or evaluation posts in the last crawl.")));
+  }
+
   async function jrPakistan(panel) {
     const d = await jrLoad(panel, "/api/jobradar/directory?kind=x&with=pakistan");
     if (!d) return;
@@ -1127,6 +1135,64 @@
             h("td", null, link(r.jobs_url, r.hiring ? "Open roles" : "Jobs page"))))))) : h("p", { class: "muted", text: "No companies match." })));
   }
 
+  async function jrAccelerators(panel) {
+    const params = new URLSearchParams(location.search);
+    const f = { programme: params.get("programme") || "", junior: params.get("junior") || "", family: params.get("family") || "", q: params.get("q") || "" };
+    const qs = () => new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
+    const d = await jrLoad(panel, `/api/jobradar/portfolio?${qs()}`);
+    if (d) {
+      const rerun = () => { history.replaceState({}, "", `${location.pathname}?${qs()}#workspace`); clear(panel); jrAccelerators(panel); };
+      const link = (href, text) => safeHref(href) ? h("a", { href, target: "_blank", rel: "noopener noreferrer", text }) : text;
+      const p = d.programmes.find((x) => x.name === d.programme);
+      if (!p) {
+        panel.append(h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Portfolios" })),
+          h("p", { class: "muted" }, "No portfolios read yet. ", h("a", { href: "/t/job-radar/crawl", "data-link": true, text: "Open Crawl" }), " and press Read portfolios.")));
+      } else {
+        const junior = h("input", { type: "checkbox", id: "pf-junior" }); junior.checked = f.junior === "1";
+        junior.addEventListener("change", () => { f.junior = junior.checked ? "1" : ""; rerun(); });
+        const search = h("input", { type: "search", placeholder: "Search company or role", value: f.q, "aria-label": "Search portfolio" });
+        search.addEventListener("change", () => { f.q = search.value; rerun(); });
+        const family = h("select", { "aria-label": "Title family" }, h("option", { value: "", text: "Title: any" }),
+          d.families.map(([v, n]) => h("option", { value: v, text: `${v} (${n})` })));
+        family.value = f.family; family.addEventListener("change", () => { f.family = family.value; rerun(); });
+        panel.append(
+          h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Portfolios" }), h("p", { text: "Companies each programme backs, read from its job board" })),
+            h("div", { class: "chips" }, d.programmes.map((x) => h("button", { type: "button", class: `chip${x.name === d.programme ? " on" : ""}`, onclick: () => { f.programme = x.name; f.q = ""; f.family = ""; rerun(); } },
+              x.name, h("span", { text: String(x.ai_roles) }))))),
+          h("div", { class: "grid tiles" },
+            tile("Companies", p.companies.toLocaleString(), `${p.name} ${p.kind === "accelerator" ? "has accelerated" : "has backed"}`),
+            tile("Open postings", p.roles.toLocaleString(), "across those companies"),
+            tile("AI postings", p.ai_roles.toLocaleString(), "AI titles, data work and fellowships"),
+            tile("No senior title", p.junior_ai.toLocaleString(), "of the AI postings")),
+          p.failed ? h("div", { class: "notice warn" }, icon("alert"), h("div", { text: `Part of this board could not be read last time: ${p.failed}` })) : null,
+          h("div", { class: "card" },
+            h("div", { class: "card-head" }, h("h2", { text: `AI roles at ${p.name} companies` }), h("p", { text: "Titles are read from each job's address; open the role for location and full details" })),
+            h("div", { class: "toolbar wrap" }, search, family, h("label", { class: "check", for: "pf-junior" }, junior, " No senior titles"),
+              link(p.board, "Open the board")),
+            d.roles.length ? h("div", { class: "table-wrap" }, h("table", { class: "table" },
+              h("thead", null, h("tr", null, ["Role", "Company", "Title family", "Level"].map((c) => h("th", { text: c })))),
+              h("tbody", null, d.roles.map((r) => h("tr", null,
+                h("td", null, link(r.url, r.title), r.postings > 1 ? h("div", { class: "muted small-text", text: `${r.postings} postings with this title` }) : null),
+                h("td", { text: r.company }),
+                h("td", null, h("div", { text: r.family }), h("div", { class: "muted small-text", text: r.track })),
+                h("td", null, r.junior ? badge("pass", r.level) : badge("warn", r.level)))))))
+              : h("p", { class: "muted", text: "No AI roles match." }),
+            d.roles_matched > d.roles.length ? h("p", { class: "muted small-text", text: `Showing ${d.roles.length} of ${d.roles_matched}. Search to narrow.` }) : null),
+          h("div", { class: "card" },
+            h("div", { class: "card-head" }, h("h2", { text: `${p.name} portfolio companies` }), h("p", { text: "Most AI postings first; companies with nothing open are listed too" })),
+            h("div", { class: "table-wrap" }, h("table", { class: "table" },
+              h("thead", null, h("tr", null, ["Company", "Open postings", "AI postings", "No senior title", ""].map((c) => h("th", { text: c })))),
+              h("tbody", null, d.companies.map((c) => h("tr", null,
+                h("td", null, h("strong", { text: c.name })),
+                h("td", { class: "num", text: String(c.roles) }), h("td", { class: "num", text: String(c.ai_roles) }),
+                h("td", { class: "num", text: String(c.junior_ai) }),
+                h("td", null, safeHref(c.url) ? h("a", { class: "btn small", href: c.url, target: "_blank", rel: "noopener noreferrer", text: "Company page" }) : null)))))),
+            d.companies_matched > d.companies.length ? h("p", { class: "muted small-text", text: `Showing ${d.companies.length} of ${d.companies_matched.toLocaleString()}. Search to find the rest.` }) : null));
+      }
+    }
+    await jrDirectory(panel, "Accelerator", "All accelerators and founder programmes", "Links to each programme's portfolio and job board; YC's recent batches are under YC Companies");
+  }
+
   async function jrCrawl(panel) {
     const d = await jrLoad(panel, "/api/jobradar/status");
     if (!d) return;
@@ -1153,11 +1219,13 @@
         tile("Last crawl", d.last_run ? ago(Date.parse(d.last_run) / 1000) : "never", d.last_run ? d.last_run.slice(0, 16).replace("T", " ") : ""),
         tile("Jobs in the lens", String(c.lens ?? 0), "junior, target countries"),
         tile("YC companies", String(c.yc_recent ?? 0), "last three years"),
+        tile("Portfolio companies", String(c.portfolio_company ?? 0), "accelerators and investors"),
         tile("Company boards", String(c.discovered_boards ?? 0), "found by discovery")),
       h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Run" }), h("p", { text: `job-radar at ${d.dir}` })),
         h("div", { class: "head-actions" },
           h("button", { class: "btn primary", type: "button", onclick: start("jobs") }, "Crawl job boards"),
           h("button", { class: "btn", type: "button", onclick: start("yc") }, "Refresh YC companies"),
+          h("button", { class: "btn", type: "button", onclick: start("portfolios") }, "Read portfolios"),
           h("button", { class: "btn", type: "button", onclick: start("boards") }, "Discover more boards")),
         state, logBox),
       d.funnel.length ? h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Last crawl's funnel" }), h("p", { text: "What each stage removed, and why" })),
@@ -1169,11 +1237,11 @@
     "lead-finder/list": leadList,
     "client-reports/clients": clientsPage,
     "job-radar/jobs": jrJobs,
-    "job-radar/platforms": (p) => jrDirectory(p, "AI work platform", "AI work platforms", "Contract and small-contract work training and checking AI models"),
+    "job-radar/platforms": jrPlatforms,
     "job-radar/fellowships": jrFellowships,
     "job-radar/pakistan": jrPakistan,
     "job-radar/yc": jrYc,
-    "job-radar/accelerators": (p) => jrDirectory(p, "Accelerator", "Accelerators and founder programmes", "Portfolios and job boards; YC's full recent cohort is under YC Companies"),
+    "job-radar/accelerators": jrAccelerators,
     "job-radar/crawl": jrCrawl,
   };
 

@@ -159,23 +159,31 @@ def audit(url: str, city: str, fetch) -> dict:
         )
     )
     has_nap = bool(biz and biz.get("name") and addr_text.strip() and biz.get("telephone"))
+    missing = ", ".join(
+        k
+        for k, ok in (
+            ("name", (biz or {}).get("name")),
+            ("address", addr_text.strip()),
+            ("telephone", (biz or {}).get("telephone")),
+        )
+        if not ok
+    )
+    # With no LocalBusiness block there is nothing to be missing *from*; saying "missing: name"
+    # beside an Organization that names the business reads as a contradiction.
+    if has_nap:
+        nap_detail = "All three present."
+    elif biz:
+        nap_detail = f"The LocalBusiness data is missing: {missing}."
+    else:
+        nap_detail = "There is no LocalBusiness data to hold them" + (
+            f" (the Organization data names {org.get('name')})." if (org or {}).get("name") else "."
+        )
     items.append(
         check(
             "nap-data",
             "Name, address and phone in the data",
             PASS if has_nap else FAIL if biz else WARN,
-            "All three present."
-            if has_nap
-            else "Missing: "
-            + ", ".join(
-                k
-                for k, ok in (
-                    ("name", (biz or {}).get("name")),
-                    ("address", addr_text.strip()),
-                    ("telephone", (biz or {}).get("telephone")),
-                )
-                if not ok
-            ),
+            nap_detail,
             "Fill name, a PostalAddress (street, city) and telephone in the LocalBusiness data.",
             2,
         )

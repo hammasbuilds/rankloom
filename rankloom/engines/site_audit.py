@@ -221,7 +221,8 @@ def audit(url: str, fetch: Fetch = safe_fetch) -> dict:
             "speed",
             "Fast server response",
             PASS if ms < 800 else WARN if ms < 2500 else FAIL,
-            f"First byte to last byte took {ms} ms.",
+            f"Took {ms} ms, measured from this server - a slow connection here slows it too, "
+            "so confirm with a speed test before quoting it.",
             "Cache the page, use a CDN, or move to faster hosting; aim for under 800 ms.",
             2,
         )

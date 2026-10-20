@@ -75,6 +75,9 @@ LOCAL = ("near me", "nearby", " in ", "near")
 STOP = set(
     "a an the of for to in on and or with by at is are be how what why which where when "
     "who can does do should my your near me best top vs from".split()
+    # Filler and the sites people name in searches: true phrasings, but nothing to write about.
+    + "much many number contact list online new today get one per after work full olx daraz "
+    "amazon reddit youtube quora wikipedia facebook instagram tiktok".split()
 )
 MODIFIERS = [
     "best",
@@ -147,7 +150,10 @@ def expand(seed: str, country: str = "pk", deep: bool = False, budget_s: float =
     groups: dict[str, list[str]] = {}
     for p in unique:
         groups.setdefault(intent(p), []).append(p)
-    seed_words = set(seed.lower().split())
+    # Words this tool added to the lookups ("kya", "lahore", "near me") are not words searchers
+    # chose, so they must not come back as "related terms" a page is graded for missing.
+    ours = {w for m in (*MODIFIERS, *MODIFIERS_PK, "how to", "what is") for w in m.split()}
+    seed_words = set(seed.lower().split()) | ours
     terms = Counter(
         w
         for p in unique

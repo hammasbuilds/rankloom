@@ -252,7 +252,7 @@ def desktop_plan(base: str, shots: Path) -> dict:
     steps = [
         *auth_steps("Ayesha Khan", email, pw),
         {
-            "label": "six tool names in the sidebar, no numbers",
+            "label": "seven tool names in the sidebar, no numbers",
             "js": "const n=[...document.querySelectorAll('.sidebar .nav.tools > li.tool > .row > a.item')].map(a=>a.textContent.trim());"
             "return [n, n.some(t=>/\\d/.test(t))];",
             "expect": [
@@ -263,6 +263,7 @@ def desktop_plan(base: str, shots: Path) -> dict:
                     "Search Performance",
                     "Content Studio",
                     "Client Reports",
+                    "Job Radar",
                 ],
                 False,
             ],
@@ -270,7 +271,7 @@ def desktop_plan(base: str, shots: Path) -> dict:
         {
             "label": "every tool and sub-tool has a window button",
             "js": "return document.querySelectorAll('.sidebar .nav.tools .pop').length;",
-            "expect": 6 + 18,
+            "expect": 7 + 25,
         },
         {
             "label": "the window button opens a popup window, not just a tab",
@@ -449,6 +450,83 @@ def desktop_plan(base: str, shots: Path) -> dict:
         {"screenshot": str(shots / "dashboard.png")},
         {"click": "button[data-key=about]", "after": 300},
         {"expectText": "#panel", "contains": "What Site Audit does"},
+        # Job Radar, against a fixture job-radar folder
+        nav("/t/job-radar"),
+        {"waitFor": ".subgrid"},
+        {
+            "label": "Job Radar has its seven pages",
+            "js": "return document.querySelectorAll('.subgrid .subcard').length;",
+            "expect": 7,
+        },
+        nav("/t/job-radar/jobs"),
+        {"waitFor": ".chips .chip"},
+        {
+            "label": "every country with a role is a chip",
+            "js": "return [...document.querySelectorAll('.chips .chip')].map(c=>c.firstChild.textContent).sort();",
+            "expect": ["Germany", "Not stated", "Pakistan", "Singapore", "United Kingdom"],
+        },
+        {"screenshot": str(shots / "job-radar-jobs.png")},
+        {
+            "js": "[...document.querySelectorAll('.chips .chip')].find(c=>c.firstChild.textContent==='Singapore').click(); return true;",
+            "after": 900,
+        },
+        {"waitFor": "table.jobs tbody tr"},
+        {
+            "label": "a country chip filters to that country",
+            "js": "return [...document.querySelectorAll('table.jobs tbody tr')].map(r=>r.cells[1].innerText);",
+            "expect": ["Grab"],
+        },
+        {
+            "label": "the filter is in the address, so a new window opens on it",
+            "js": "return location.search.includes('country=Singapore');",
+        },
+        {"js": "document.querySelector('.toolbar .btn.ghost').click(); return true;", "after": 900},
+        {"waitFor": "table.jobs tbody tr"},
+        {"select": "#panel select[aria-label='Terms']", "value": "Small contract", "after": 900},
+        {"js": "await new Promise(r=>setTimeout(r,900)); return true;"},
+        {
+            "label": "terms filter",
+            "js": "return [...document.querySelectorAll('table.jobs tbody tr')].map(r=>r.cells[1].innerText);",
+            "expect": ["Mercor"],
+        },
+        {"js": "document.querySelector('.toolbar .btn.ghost').click(); return true;", "after": 900},
+        {
+            "js": "document.querySelector('#jr-reach').click(); await new Promise(r=>setTimeout(r,900)); return true;"
+        },
+        {
+            "label": "only reachable roles hides the one that refuses sponsorship",
+            "js": "return [...document.querySelectorAll('table.jobs tbody tr')].map(r=>r.cells[1].innerText).includes('Zaizi');",
+            "expect": False,
+        },
+        {"audit": FORBID},
+        nav("/t/job-radar/fellowships"),
+        {"waitFor": "#panel table"},
+        {"expectText": "#panel", "contains": "Source: Greenhouse 2026-10-20"},
+        nav("/t/job-radar/pakistan"),
+        {"waitFor": "#panel table"},
+        {"expectText": "#panel", "contains": "Assistant Director (IT)"},
+        nav("/t/job-radar/yc"),
+        {"waitFor": "#panel table"},
+        {
+            "label": "YC shows a real profile and a labelled search",
+            "js": "return [...document.querySelectorAll('#panel tbody tr')].map(r=>r.cells[3].innerText);",
+            "expect": ["Profile", "Search"],
+        },
+        {"select": "#panel select[aria-label='Hiring']", "value": "0", "after": 900},
+        {
+            "js": "await new Promise(r=>setTimeout(r,900)); return [...document.querySelectorAll('#panel tbody tr')].length;",
+            "expect": 1,
+            "label": "not-hiring filter",
+        },
+        {"screenshot": str(shots / "job-radar-yc.png")},
+        nav("/t/job-radar/crawl"),
+        {"waitFor": "#panel .head-actions .btn.primary"},
+        {"click": "#panel .head-actions .btn.primary", "after": 4500},
+        {
+            "label": "a crawl started from the page runs and its log appears",
+            "js": "return document.querySelector('pre.log').textContent.includes('crawl fixture done');",
+        },
+        {"audit": FORBID},
         nav("/settings"),
         {"waitFor": "#two-step .btn.primary"},
         {"click": "#two-step .btn.primary", "after": 700},
@@ -549,6 +627,14 @@ def main() -> int:
     sources.places = recorded_places
     failed = 0
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as data:
+        from test_jobradar_link import build
+
+        radar = build(Path(data) / "job-radar")
+        (radar / "scripts" / "fetch.py").write_text(
+            "print('crawl fixture done')\n", encoding="utf-8"
+        )
+        os.environ["RANKLOOM_JOBRADAR_DIR"] = str(radar)
+        os.environ.pop("JOBRADAR_DB", None)
         app = server.App(data, "http://127.0.0.1")
         app.fetch = fixture_fetch
         srv = server.make_server(app, "127.0.0.1", 0)

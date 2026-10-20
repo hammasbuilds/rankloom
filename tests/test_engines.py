@@ -253,7 +253,7 @@ def test_a_brief_turns_real_questions_into_headings(fake_suggest):
     b = content.brief("rooftop solar")
     assert any(h.startswith("H2: How much") for h in b["outline"])
     assert b["outline"][0].startswith("H1: Rooftop solar")
-    assert "price" in b["terms"]
+    assert "price" not in b["terms"]  # added by the lookups, not chosen by searchers
 
 
 # --- answer check and drafts (AI engine faked) -------------------------------------------------
@@ -405,3 +405,37 @@ def test_opportunities_keep_a_small_sites_near_page_one_queries():
     assert "inverter" in [r["key"] for r in o["striking"]]
     assert "battery" in [r["key"] for r in o["zero"]]
     assert o["floor"] == 1300
+
+
+def test_a_site_that_did_not_answer_is_never_quoted_to_the_business():
+    from rankloom.engines import leads
+    from rankloom.netguard import FetchFailed
+
+    def down(url):
+        raise FetchFailed("timed out")
+
+    qa = leads.quick_audit("https://slow.example/", down)
+    assert qa["problems"] == [leads.UNREACHABLE]
+    email = leads.write_drafts("Pro Hygenist", "https://slow.example/", qa["problems"], "", "")[0]
+    text = email["text"]
+    assert "does not load" not in text and "did not answer" not in text
+    assert "quick wins" in text
+    one = leads.write_drafts("A", "https://a.example/", ["the home page has no title"], "", "")
+    assert "1 thing I noticed" in one[0]["text"]
+
+
+def test_no_localbusiness_block_is_not_reported_as_a_missing_name():
+    page = html(
+        "Hospital",
+        "<p>Call 042 3590 5000</p>",
+        '<script type="application/ld+json">{"@type":"Organization","name":"SKM"}</script>',
+    )
+    r = local_seo.audit("skm.example", "Lahore", site({"/": (200, page)}))
+    nap = next(c for c in r["checks"] if c["id"] == "nap-data")
+    assert "Missing" not in nap["detail"] and "names SKM" in nap["detail"]
+
+
+def test_words_the_tool_added_to_lookups_are_not_related_terms(fake_suggest):
+    r = content.expand("rooftop solar", "pk")
+    words = {w for w, _ in r["terms"]}
+    assert not words & {"kya", "kaise", "lahore", "karachi", "pakistan", "much", "number"}

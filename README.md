@@ -18,11 +18,20 @@ several can sit side by side.
 | [Search Performance](rankloom/engines/search_perf.py) | Import Report · Opportunities · Changes | Real Google numbers from Search Console: where clicks are won, missed and lost |
 | [Content Studio](rankloom/engines/content.py) | Keyword Ideas · Content Brief · Draft Writer · Content Grader | The monthly retainer work: what people search, a brief, a checked draft, a grade |
 | [Client Reports](rankloom/engines/reports.py) | Clients · Monthly Report | A printable monthly report per client that shows what they are paying for |
+| [Job Radar](rankloom/jobradar_link.py) | Jobs · AI Work Platforms · Fellowships · Pakistan Gov & Grants · YC Companies · Accelerators · Crawl | Junior AI jobs by country, programmes and companies, read from the private job-radar crawler |
 
-Every sub-tool has a Run tab, its own history and an About panel; every tool has a dashboard of
-visits, runs and scores broken down by sub-tool. Eighteen sub-tools: fourteen run now, two are
-workspaces (Lead List and Clients), and two - Answer Check and Draft Writer - run once an AI
-engine is configured, and say so until then.
+Every sub-tool has a Run tab or a workspace, its own history and an About panel; every tool has
+a dashboard of visits, runs and scores broken down by sub-tool. Of the eighteen sub-tools in the
+first six tools, fourteen run now, two are workspaces (Lead List and Clients), and two - Answer
+Check and Draft Writer - run once an AI engine is configured, and say so until then.
+
+**Job Radar** reads the database of [job-radar](https://github.com/hammasbuilds/job-radar)
+(private) read-only, and starts its crawl as a child process. Point `RANKLOOM_JOBRADAR_DIR` at
+the job-radar folder (default `D:/github/job-radar`). Jobs filter by country, region, title
+family (ML/DL, machine learning, deep learning, computer vision, generative AI, agentic AI),
+engineer or researcher, onsite / hybrid / remote, full-time / contract / small contract, and
+experience (junior only: at most two years), with a per-country chip row and an "open to me from
+Pakistan" switch.
 
 ## Where the data comes from
 
@@ -136,7 +145,7 @@ ignores.
 ## Checks
 
 ```bash
-uv run pytest                      # 114 tests, no network: every engine, the HTTP API end to end, RFC 6238 vectors
+uv run pytest                      # 123 tests, no network: every engine, the HTTP API end to end, RFC 6238 vectors
 uv run ruff check . && uv run ruff format --check .
 uv run python scripts/ui_check.py  # headless Chrome: every sub-tool, Lead List, Clients, a report, 2-step, phone width
 ```

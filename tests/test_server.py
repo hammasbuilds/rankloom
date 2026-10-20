@@ -315,6 +315,7 @@ def test_catalog_has_six_tools_each_with_sub_tools_and_an_about(app):
         "Search Performance",
         "Content Studio",
         "Client Reports",
+        "Job Radar",
     ]
     runnable = set()
     for t in tools:

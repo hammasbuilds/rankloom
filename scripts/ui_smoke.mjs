@@ -131,7 +131,7 @@ class Session {
           this.pending.delete(id);
           reject(new Error(`${method} timed out`));
         }
-      }, 60_000);
+      }, 300_000);
     });
   }
 

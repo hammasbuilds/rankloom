@@ -520,6 +520,125 @@ TOOLS: list[dict] = [
     },
 ]
 
+
+def _page(slug, name, tagline, about, does, input_, output):
+    return {
+        "slug": slug,
+        "name": name,
+        "kind": "page",
+        "tagline": tagline,
+        "about": about,
+        "does": does,
+        "input": input_,
+        "output": output,
+        "fields": [],
+    }
+
+
+TOOLS.append(
+    {
+        "slug": "job-radar",
+        "name": "Job Radar",
+        "tagline": "Junior AI jobs, programmes and companies, country by country.",
+        "about": (
+            "Reads job-radar, the crawler that asks hundreds of company career boards and open "
+            "job APIs (never LinkedIn) for ML/DL, machine learning, deep learning, computer "
+            "vision, generative AI and agentic AI roles - engineer and researcher - at junior "
+            "level, across "
+            "Europe, the Gulf, Pakistan and East and Southeast Asia. India and Bangladesh are left "
+            "out. Alongside the jobs: AI work platforms, paid fellowships, Pakistani government "
+            "jobs and grants, every recent YC company and the accelerators like it."
+        ),
+        "subtools": [
+            _page(
+                "jobs",
+                "Jobs",
+                "Filter by country, experience, place, title and terms.",
+                "Every junior posting in the target countries, with its route from Pakistan as a "
+                "value to filter on: the country it is in, the title family, engineer or "
+                "researcher, onsite, hybrid or remote, full-time, contract or small contract, and "
+                "the experience it asks for.",
+                [
+                    "Counts per country, one click to filter",
+                    "Title family and track filters",
+                    "Workplace, terms and experience filters",
+                ],
+                "Filters",
+                "Postings with links and reasons",
+            ),
+            _page(
+                "platforms",
+                "AI Work Platforms",
+                "Mercor, DataAnnotation, Alignerr and more.",
+                "Platforms that pay for expert work training and checking AI models - coding, "
+                "research and domain tasks, mostly contract and small contract - with the open "
+                "roles job-radar found on each.",
+                ["Lists the platforms with links", "Counts their open roles from the crawl"],
+                "Nothing",
+                "Platforms and their open roles",
+            ),
+            _page(
+                "fellowships",
+                "Fellowships",
+                "Paid AI fellowships, residencies and programmes.",
+                "Fellowships and residencies at Anthropic, OpenAI, Constellation and others, with "
+                "the stipend stated only where a live posting confirmed it, and every programme "
+                "posting the crawl found.",
+                [
+                    "States verified pay with its source",
+                    "Shows eligibility limits",
+                    "Lists live programme postings",
+                ],
+                "Nothing",
+                "Programmes and live postings",
+            ),
+            _page(
+                "pakistan",
+                "Pakistan Gov & Grants",
+                "Government CS/IT/AI jobs, HEC and grants.",
+                "Computing posts at Pakistani government, university and state employers - from "
+                "the National Job Portal and the crawl - and the grants open to junior scientists "
+                "and researchers.",
+                ["Lists public-sector CS/IT/AI posts", "Lists HEC, Ignite and other grants"],
+                "Nothing",
+                "Posts and grants with links",
+            ),
+            _page(
+                "yc",
+                "YC Companies",
+                "Every YC company of the last three years.",
+                "All Y Combinator companies from the last three years of batches, hiring or not, "
+                "with their website, LinkedIn profile (read from the YC page), YC page and jobs "
+                "page.",
+                ["Filters by batch, hiring and AI", "Real LinkedIn where YC links it"],
+                "Filters",
+                "Companies with links",
+            ),
+            _page(
+                "accelerators",
+                "Accelerators",
+                "Programmes like YC, and their job boards.",
+                "Accelerators and founder programmes like Y Combinator - Techstars, Antler, EF, "
+                "Seedcamp, Hub71 and more - with their portfolio pages and job boards.",
+                ["Lists 20+ programmes by region", "Links portfolios and job boards"],
+                "Nothing",
+                "Programmes with links",
+            ),
+            _page(
+                "crawl",
+                "Crawl",
+                "Run job-radar and see what it found.",
+                "Starts a job-radar crawl, a YC refresh or a board discovery pass, and shows the "
+                "last run's funnel: how many postings were read and why each stage removed what "
+                "it did.",
+                ["Starts a crawl in the background", "Shows the funnel and the log"],
+                "A click",
+                "Counts and the funnel",
+            ),
+        ],
+    }
+)
+
 BY_SLUG = {t["slug"]: t for t in TOOLS}
 
 

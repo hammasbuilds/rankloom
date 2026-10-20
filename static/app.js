@@ -68,6 +68,7 @@
     "search-performance": "M23 6l-9.5 9.5-5-5L1 18M17 6h6v6",
     "content-studio": "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M16 13H8M16 17H8M10 9H8",
     "client-reports": "M3 3v18h18M7 15l4-4 3 3 5-6",
+    "job-radar": "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 18a6 6 0 1 0 0-12M12 12l7-7",
   };
   function icon(name) {
     return s("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "2",
@@ -597,7 +598,7 @@
   // ---------------------------------------------------------------- overview
   async function overview(main) {
     const first = (state.user.name || "").split(" ")[0];
-    const p = page(main, `Welcome back, ${first}`, "Six tools, each with its own sub-tools. Open any of them here, or in a window of its own to use several side by side.");
+    const p = page(main, `Welcome back, ${first}`, `${state.tools.length} tools, each with its own sub-tools. Open any of them here, or in a window of its own to use several side by side.`);
     const body = h("div", { class: "loading", text: "Loading your workspace…" });
     p.append(body);
     let d;
@@ -712,8 +713,13 @@
           barChart(st.daily.map((x) => ({ day: x.day, value: x.runs })), { unit: "runs", label: `${tool.name} runs per day` })),
         h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Visits per day" }), h("p", { text: "Last 14 days" })),
           barChart(st.daily.map((x) => ({ day: x.day, value: x.opens })), { unit: "visits", alt: true, label: `${tool.name} visits per day` }))),
-      scores.length ? h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Scores over your last runs" }),
-        h("p", { text: "Out of 100, oldest on the left" })), lineChart(scores, { label: "Scores over recent runs" })) : null,
+      // One trend per sub-tool: a Page Audit score and a Local SEO score measure different
+      // things, and joining them with one line drew a decline that never happened.
+      [...new Set(scores.map((x) => x.subtool))].map((subtool) => {
+        const own = scores.filter((x) => x.subtool === subtool);
+        return h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: `${subName(tool.slug, subtool)}: score over your runs` }),
+          h("p", { text: "Out of 100, oldest on the left" })), lineChart(own, { label: `${subName(tool.slug, subtool)} score over recent runs` }));
+      }),
       historyCard(tool, runs.runs, true));
   }
 
@@ -727,7 +733,7 @@
           withSub ? h("td", { text: subName(tool.slug, r.subtool) }) : null,
           h("td", null, r.status === "error" ? badge("fail", "Failed") : null, " ", r.summary),
           h("td", { class: "num", text: r.score === null ? "" : String(r.score) }),
-          h("td", { class: "num", text: `${(r.duration_ms / 1000).toFixed(1)} s` })))))) :
+          h("td", { class: "num nowrap", text: `${(r.duration_ms / 1000).toFixed(1)} s` })))))) :
         h("p", { class: "muted", text: "No runs yet." }));
   }
 
@@ -741,7 +747,7 @@
     const list = sub.kind === "page" ? [["workspace", sub.name], ["about", "About"]] : [["run", "Run"], ["history", "History"], ["about", "About"]];
     tabs(p, list, first, (key, panel) => {
       if (key === "run") runPanel(panel, tool, sub);
-      else if (key === "workspace") (sub.slug === "list" ? leadList : clientsPage)(panel);
+      else if (key === "workspace") (PAGES[`${tool.slug}/${sub.slug}`] || notConnected)(panel);
       else if (key === "history") subHistory(panel, tool, sub);
       else panel.append(aboutCard(sub));
     });
@@ -949,6 +955,227 @@
           h("p", { class: "muted", text: "No clients yet. Add one to start sending monthly reports." })),
       editor);
   }
+
+  // ---------------------------------------------------------------- Job Radar
+  function notConnected(panel, message) {
+    panel.append(h("div", { class: "notice warn" }, icon("alert"), h("div", null,
+      h("strong", { text: "Job Radar is not connected. " }), message || "This page has nothing to show yet.",
+      " ", h("a", { href: "/t/job-radar/crawl", "data-link": true, text: "Open Crawl" }))));
+  }
+
+  async function jrLoad(panel, path) {
+    const body = h("div", { class: "loading", text: "Reading job-radar…" });
+    panel.append(body);
+    try { const d = await api("GET", path); body.remove(); return d; }
+    catch (e) {
+      body.remove();
+      if (e.data && e.data.not_connected) notConnected(panel, e.message);
+      else panel.append(h("div", { class: "notice bad" }, icon("alert"), h("div", { text: e.message })));
+      return null;
+    }
+  }
+
+  const JR_FILTERS = [
+    ["country", "Country"], ["region", "Region"], ["family", "Title"], ["track", "Engineer or researcher"],
+    ["workplace", "Workplace"], ["terms", "Terms"], ["years", "Experience"],
+  ];
+  const JR_FIXED = {
+    region: [["europe", "Europe"], ["gulf", "Gulf"], ["pakistan", "Pakistan"], ["asia", "East & Southeast Asia"]],
+    years: [["1", "Up to 1 year"], ["2", "Up to 2 years"], ["unstated", "Not stated"]],
+  };
+
+  async function jrJobs(panel) {
+    const params = new URLSearchParams(location.search);
+    const f = Object.fromEntries(JR_FILTERS.map(([k]) => [k, params.get(k) || ""]));
+    f.q = params.get("q") || ""; f.reachable = params.get("reachable") || "";
+    const qs = () => new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
+    const d = await jrLoad(panel, `/api/jobradar/jobs?${qs()}`);
+    if (!d) return;
+    const rerun = () => {
+      history.replaceState({}, "", `${location.pathname}?${qs()}#workspace`);
+      clear(panel); jrJobs(panel);
+    };
+    const selects = JR_FILTERS.map(([key, label]) => {
+      const opts = JR_FIXED[key] || (d.facets[key === "country" ? "country" : key] || []).map(([v, n]) => [v, `${v} (${n})`]);
+      const sel = h("select", { "aria-label": label }, h("option", { value: "", text: `${label}: any` }),
+        opts.map(([v, l]) => h("option", { value: v, text: l })));
+      sel.value = f[key];
+      sel.addEventListener("change", () => { f[key] = sel.value; rerun(); });
+      return sel;
+    });
+    const search = h("input", { type: "search", placeholder: "Search title, company or city", value: f.q, "aria-label": "Search jobs" });
+    search.addEventListener("change", () => { f.q = search.value; rerun(); });
+    const reach = h("input", { type: "checkbox", id: "jr-reach" });
+    reach.checked = f.reachable === "1";
+    reach.addEventListener("change", () => { f.reachable = reach.checked ? "1" : ""; rerun(); });
+    const chips = h("div", { class: "chips" }, d.facets.country.slice(0, 40).map(([c, n]) =>
+      h("button", { type: "button", class: `chip${f.country === c ? " on" : ""}`, onclick: () => { f.country = f.country === c ? "" : c; rerun(); } },
+        c, h("span", { text: String(n) }))));
+    const route = (r) => r.reachable
+      ? badge(r.route.includes("sponsorship") || ["europe", "gulf", "asia", "pakistan", "remote"].some((x) => r.route.split(",").includes(x)) ? "pass" : "warn",
+        r.route.split(",").includes("sponsorship") ? "Sponsors visa" : r.route.split(",").includes("remote") ? "Remote route"
+          : /,|^(europe|gulf|asia|pakistan)$/.test(r.route) ? "Route in" : r.route)
+      : badge("fail", r.route);
+    panel.append(
+      h("div", { class: "grid tiles" },
+        tile("In the lens", String(d.total), "junior, target countries"),
+        tile("Matching", String(d.matched), "with these filters"),
+        tile("Countries", String(d.facets.country.length), "with at least one role"),
+        tile("Reachable", String(d.rows.filter((r) => r.reachable).length), "of those shown")),
+      h("div", { class: "card" },
+        h("div", { class: "card-head" }, h("h2", { text: "Search by country" }), h("p", { text: "Click a country; click again to clear" })), chips),
+      h("div", { class: "card" },
+        h("div", { class: "toolbar wrap" }, search, ...selects,
+          h("label", { class: "check", for: "jr-reach" }, reach, " Only roles open to me from Pakistan"),
+          h("button", { class: "btn small ghost", type: "button", onclick: () => { for (const k of Object.keys(f)) f[k] = ""; rerun(); } }, "Clear filters")),
+        d.rows.length ? h("div", { class: "table-wrap" }, h("table", { class: "table jobs" },
+          h("thead", null, h("tr", null, ["Role", "Company", "Country", "Title family", "Place", "Terms", "Experience", "Route", "Posted"].map((c) => h("th", { text: c })))),
+          h("tbody", null, d.rows.map((r) => h("tr", null,
+            h("td", null, safeHref(r.url) ? h("a", { href: r.url, target: "_blank", rel: "noopener noreferrer", text: r.title }) : r.title),
+            h("td", { text: r.company }),
+            h("td", { text: r.countries.join(", ") || "Not stated" }),
+            h("td", null, h("div", { text: r.family }), h("div", { class: "muted small-text", text: r.track })),
+            h("td", { text: r.workplace }), h("td", { text: r.terms }),
+            h("td", { text: r.years === null ? "Not stated" : `${r.years} yr` }),
+            h("td", null, route(r)),
+            h("td", { class: "muted nowrap", text: r.posted ? r.posted.slice(0, 10) : "" }))))))
+          : h("p", { class: "muted", text: "No roles match these filters." }),
+        d.matched > d.rows.length ? h("p", { class: "muted small-text", text: `Showing the newest ${d.rows.length} of ${d.matched}. Narrow the filters to see the rest.` }) : null));
+  }
+
+  function directoryTable(entries) {
+    return h("div", { class: "table-wrap" }, h("table", { class: "table" },
+      h("thead", null, h("tr", null, ["Name", "What it is", "Pay", "Who can apply", "Open now", ""].map((c) => h("th", { text: c })))),
+      h("tbody", null, entries.map((e) => h("tr", null,
+        h("td", null, safeHref(e.url) ? h("a", { href: e.url, target: "_blank", rel: "noopener noreferrer", text: e.name }) : e.name,
+          e.region && e.region !== "global" ? h("div", { class: "muted small-text", text: e.region }) : null),
+        h("td", { text: e.what }),
+        h("td", null, h("div", { text: e.pay }), e.pay_source ? h("div", { class: "muted small-text", text: `Source: ${e.pay_source}` }) : null),
+        h("td", { class: "small-text", text: e.who || "" }),
+        h("td", { class: "num", text: e.match ? String(e.live) : "—" }),
+        h("td", null, safeHref(e.jobs_url) ? h("a", { class: "btn small", href: e.jobs_url, target: "_blank", rel: "noopener noreferrer", text: "Jobs" }) : null))))));
+  }
+
+  function postingsTable(rows, empty) {
+    if (!rows.length) return h("p", { class: "muted", text: empty });
+    return h("div", { class: "table-wrap" }, h("table", { class: "table" },
+      h("thead", null, h("tr", null, ["Post", "Employer", "Where", "Experience", "Posted"].map((c) => h("th", { text: c })))),
+      h("tbody", null, rows.map((r) => h("tr", null,
+        h("td", null, safeHref(r.url) ? h("a", { href: r.url, target: "_blank", rel: "noopener noreferrer", text: r.title }) : r.title),
+        h("td", { text: r.company }), h("td", { text: r.location || r.countries.join(", ") }),
+        h("td", { text: r.years === null ? "Not stated" : `${r.years} yr` }),
+        h("td", { class: "muted nowrap", text: r.posted ? r.posted.slice(0, 10) : "" }))))));
+  }
+
+  async function jrDirectory(panel, kind, title, note, withFamily) {
+    const d = await jrLoad(panel, `/api/jobradar/directory?kind=${encodeURIComponent(kind)}${withFamily ? `&with=${withFamily}` : ""}`);
+    if (!d) return;
+    panel.append(h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: title }), h("p", { text: note })),
+      d.entries.length ? directoryTable(d.entries) : h("p", { class: "muted", text: "Run a crawl to fill this list." })));
+    return d;
+  }
+
+  async function jrFellowships(panel) {
+    const d = await jrDirectory(panel, "Fellowship / paid programme", "Fellowships and paid programmes",
+      "Pay is stated only where a live posting confirmed it; otherwise check the official page", "fellowship");
+    if (d) panel.append(h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Programme postings open now" }), h("p", { text: "Found by the crawl on company boards" })),
+      postingsTable(d.postings, "No fellowship or residency postings in the last crawl.")));
+  }
+
+  async function jrPakistan(panel) {
+    const d = await jrLoad(panel, "/api/jobradar/directory?kind=x&with=pakistan");
+    if (!d) return;
+    panel.append(h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Government and public-sector CS / IT / AI posts" }),
+      h("p", { text: "National Job Portal and public employers in the crawl" })),
+      postingsTable(d.postings, "No public-sector computing posts in the last crawl.")));
+    await jrDirectory(panel, "Pakistan grant / funding", "Grants for junior scientists and researchers", "HEC, Ignite and other funders");
+    await jrDirectory(panel, "Pakistan government jobs", "Where government computing jobs are advertised", "Commissions, boards and institutions");
+  }
+
+  async function jrYc(panel) {
+    const params = new URLSearchParams(location.search);
+    const f = { batch: params.get("batch") || "", hiring: params.get("hiring") || "", ai: params.get("ai") || "", q: params.get("q") || "" };
+    const qs = () => new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
+    const d = await jrLoad(panel, `/api/jobradar/yc?${qs()}`);
+    if (!d) return;
+    const rerun = () => { history.replaceState({}, "", `${location.pathname}?${qs()}#workspace`); clear(panel); jrYc(panel); };
+    const batch = h("select", { "aria-label": "Batch" }, h("option", { value: "", text: "Batch: any" }),
+      d.batches.map(([b, n]) => h("option", { value: b, text: `${b} (${n})` })));
+    batch.value = f.batch; batch.addEventListener("change", () => { f.batch = batch.value; rerun(); });
+    const hiring = h("select", { "aria-label": "Hiring" }, [["", "Hiring or not"], ["1", "Hiring now"], ["0", "Not hiring"]].map(([v, l]) => h("option", { value: v, text: l })));
+    hiring.value = f.hiring; hiring.addEventListener("change", () => { f.hiring = hiring.value; rerun(); });
+    const ai = h("input", { type: "checkbox", id: "yc-ai" }); ai.checked = f.ai === "1";
+    ai.addEventListener("change", () => { f.ai = ai.checked ? "1" : ""; rerun(); });
+    const search = h("input", { type: "search", placeholder: "Search name, product or city", value: f.q, "aria-label": "Search companies" });
+    search.addEventListener("change", () => { f.q = search.value; rerun(); });
+    const link = (href, text) => safeHref(href) ? h("a", { href, target: "_blank", rel: "noopener noreferrer", text }) : null;
+    panel.append(
+      h("div", { class: "grid tiles" }, tile("Companies", String(d.total), "last three years of batches"),
+        tile("Hiring now", String(d.hiring), "say so on YC"), tile("Matching", String(d.matched), "with these filters"),
+        tile("LinkedIn read", String(d.linkedin_read), "from YC pages; the rest are searches")),
+      h("div", { class: "card" }, h("div", { class: "toolbar wrap" }, search, batch, hiring,
+        h("label", { class: "check", for: "yc-ai" }, ai, " AI companies only")),
+        d.rows.length ? h("div", { class: "table-wrap" }, h("table", { class: "table" },
+          h("thead", null, h("tr", null, ["Company", "Batch", "Status", "LinkedIn", "Website", "YC page", "Careers"].map((c) => h("th", { text: c })))),
+          h("tbody", null, d.rows.map((r) => h("tr", null,
+            h("td", null, h("strong", { text: r.name }), h("div", { class: "muted small-text", text: [r.one_liner, r.location].filter(Boolean).join(" · ") })),
+            h("td", { class: "nowrap", text: r.batch }),
+            h("td", null, r.hiring ? badge("pass", "Hiring") : h("span", { class: "pill", text: "Not hiring" })),
+            h("td", null, link(r.linkedin, r.linkedin_source === "yc page" ? "Profile" : "Search")),
+            h("td", null, link(r.website, "Website")),
+            h("td", null, link(r.yc_url, "YC page")),
+            h("td", null, link(r.jobs_url, r.hiring ? "Open roles" : "Jobs page"))))))) : h("p", { class: "muted", text: "No companies match." })));
+  }
+
+  async function jrCrawl(panel) {
+    const d = await jrLoad(panel, "/api/jobradar/status");
+    if (!d) return;
+    const c = d.counts || {};
+    const logBox = h("pre", { class: "log", text: (d.crawl.log || []).join("\n") || "No crawl started from here yet." });
+    const state = h("p", { class: "muted" });
+    const showState = (cr) => { state.textContent = cr.running ? `Running: ${cr.label} (started ${ago(cr.started)})` : cr.what ? `Last: ${cr.label} - exit ${cr.exit}` : "Idle"; };
+    showState(d.crawl);
+    let timer = 0;
+    const poll = async () => {
+      try {
+        const s = await api("GET", "/api/jobradar/status");
+        logBox.textContent = s.crawl.log.join("\n"); showState(s.crawl);
+        if (s.crawl.running && document.body.contains(logBox)) timer = setTimeout(poll, 3000);
+      } catch (e) { /* the next click will say */ }
+    };
+    const start = (what) => async () => {
+      try { const r = await api("POST", "/api/jobradar/crawl", { what }); showState(r.crawl); clearTimeout(timer); timer = setTimeout(poll, 1500); toast("Crawl started"); }
+      catch (e) { toast(e.message); }
+    };
+    if (!d.connected) notConnected(panel, d.error);
+    panel.append(
+      h("div", { class: "grid tiles" },
+        tile("Last crawl", d.last_run ? ago(Date.parse(d.last_run) / 1000) : "never", d.last_run ? d.last_run.slice(0, 16).replace("T", " ") : ""),
+        tile("Jobs in the lens", String(c.lens ?? 0), "junior, target countries"),
+        tile("YC companies", String(c.yc_recent ?? 0), "last three years"),
+        tile("Company boards", String(c.discovered_boards ?? 0), "found by discovery")),
+      h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Run" }), h("p", { text: `job-radar at ${d.dir}` })),
+        h("div", { class: "head-actions" },
+          h("button", { class: "btn primary", type: "button", onclick: start("jobs") }, "Crawl job boards"),
+          h("button", { class: "btn", type: "button", onclick: start("yc") }, "Refresh YC companies"),
+          h("button", { class: "btn", type: "button", onclick: start("boards") }, "Discover more boards")),
+        state, logBox),
+      d.funnel.length ? h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Last crawl's funnel" }), h("p", { text: "What each stage removed, and why" })),
+        h("pre", { class: "log", text: d.funnel.join("\n") })) : null);
+    if (d.crawl.running) timer = setTimeout(poll, 1500);
+  }
+
+  const PAGES = {
+    "lead-finder/list": leadList,
+    "client-reports/clients": clientsPage,
+    "job-radar/jobs": jrJobs,
+    "job-radar/platforms": (p) => jrDirectory(p, "AI work platform", "AI work platforms", "Contract and small-contract work training and checking AI models"),
+    "job-radar/fellowships": jrFellowships,
+    "job-radar/pakistan": jrPakistan,
+    "job-radar/yc": jrYc,
+    "job-radar/accelerators": (p) => jrDirectory(p, "Accelerator", "Accelerators and founder programmes", "Portfolios and job boards; YC's full recent cohort is under YC Companies"),
+    "job-radar/crawl": jrCrawl,
+  };
 
   // ---------------------------------------------------------------- settings
   async function settings(main) {

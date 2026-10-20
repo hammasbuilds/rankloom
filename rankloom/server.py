@@ -26,6 +26,7 @@ import mimetypes
 import os
 import re
 import secrets
+import sqlite3
 import sys
 import time
 import traceback
@@ -36,7 +37,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import ai, github, mail, security, sources
+from . import ai, github, jobradar_link, mail, security, sources
 from .db import Database, now
 from .engines import ENGINES, search_perf
 from .engines.common import Context, InputProblem
@@ -106,6 +107,7 @@ class App:
         self.base_url = base_url.rstrip("/")
         self.secure_cookies = secure_cookies
         self.fetch = safe_fetch  # replaced in tests and in the offline browser walk
+        self.crawler = jobradar_link.Crawler(self.data_dir)
 
     def _app_key(self) -> bytes:
         env = os.environ.get("RANKLOOM_SECRET", "")
@@ -1209,6 +1211,53 @@ class Handler(BaseHTTPRequestHandler):
         )
         self.send_json(200, {"ok": True})
 
+    # --- Job Radar ------------------------------------------------------------------------------
+
+    def query(self) -> dict:
+        return {k: v[0][:200] for k, v in parse_qs(urlsplit(self.path).query).items()}
+
+    def _jr(self, fn, *args):
+        self.need_session()
+        try:
+            return fn(*args)
+        except jobradar_link.NotConnected as exc:
+            raise ApiError(409, str(exc), not_connected=True) from exc
+        except sqlite3.OperationalError as exc:
+            raise ApiError(503, f"job-radar's database is busy ({exc}). Try again.") from exc
+
+    def jr_status(self):
+        data = self._jr(jobradar_link.status)
+        self.send_json(200, {**data, "crawl": self.app.crawler.state()})
+
+    def jr_jobs(self):
+        self.send_json(200, self._jr(jobradar_link.jobs, self.query()))
+
+    def jr_directory(self):
+        kind = self.query().get("kind", "")
+        rows = self._jr(jobradar_link.directory, kind)
+        extra = []
+        family = {
+            "fellowship": "Fellowship / programme",
+            "pakistan": "Pakistan public sector (CS/IT/AI)",
+        }.get(self.query().get("with", ""))
+        if family:
+            extra = self._jr(jobradar_link.lens_family, family)
+        self.send_json(200, {"entries": rows, "postings": extra})
+
+    def jr_yc(self):
+        self.send_json(200, self._jr(jobradar_link.yc, self.query()))
+
+    def jr_crawl(self):
+        self.need_session()
+        what = str(self.body().get("what", ""))
+        try:
+            self.app.crawler.start(what)
+        except jobradar_link.NotConnected as exc:
+            raise ApiError(409, str(exc)) from exc
+        except (ValueError, RuntimeError) as exc:
+            raise ApiError(409, str(exc)) from exc
+        self.send_json(200, {"ok": True, "crawl": self.app.crawler.state()})
+
     # --- GitHub ---------------------------------------------------------------------------------
 
     def _gh_token(self, s) -> str:
@@ -1409,6 +1458,11 @@ ROUTES = {
     ("POST", "/api/clients/save"): Handler.client_save,
     ("POST", "/api/clients/delete"): Handler.client_delete,
     ("POST", "/api/gsc/delete"): Handler.gsc_delete,
+    ("GET", "/api/jobradar/status"): Handler.jr_status,
+    ("GET", "/api/jobradar/jobs"): Handler.jr_jobs,
+    ("GET", "/api/jobradar/directory"): Handler.jr_directory,
+    ("GET", "/api/jobradar/yc"): Handler.jr_yc,
+    ("POST", "/api/jobradar/crawl"): Handler.jr_crawl,
     ("POST", "/api/imports/delete"): Handler.import_delete,
 }
 

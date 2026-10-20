@@ -54,18 +54,25 @@ WARN_PLAIN = {
     "schema": "Google and AI assistants are not told what the business is or where it is",
     "content": "the home page has very little text for Google to rank",
 }
+# Speed is not here on purpose: it is measured from this server, and a slow connection here
+# would have us tell a stranger their site is slow when it is not. Only facts read from the
+# page itself are quoted to a business.
 QUICK = (
     "https",
     "status",
     "viewport",
     "title",
     "description",
-    "speed",
     "indexable",
     "robots",
     "h1",
     "schema",
 )
+
+
+# A site that did not answer *this* server may be up for everyone else (a timeout here is often
+# the connection, not the site). It is shown to you as a thing to check, never quoted to them.
+UNREACHABLE = "the website did not answer our check - open it in a browser before mentioning it"
 
 
 def quick_audit(url: str, fetch) -> dict:
@@ -75,7 +82,7 @@ def quick_audit(url: str, fetch) -> dict:
         return {
             "reachable": False,
             "error": str(exc),
-            "problems": ["the website does not load"],
+            "problems": [UNREACHABLE],
             "score": 0,
         }
     bad = [c for c in r["checks"] if c["status"] != PASS and c["id"] in QUICK]
@@ -106,7 +113,7 @@ def opportunity(lead: dict) -> int:
         return 50
     qa = lead.get("audit") or {}
     if not qa.get("reachable", True):
-        return 85
+        return 45  # unknown until someone opens it in a browser
     return max(5, min(80, 100 - int(qa.get("score", 50))))
 
 
@@ -232,7 +239,7 @@ def run_search(fields: dict, ctx: Context):
         )
     r["view"] = view(
         headline(
-            f"{r['found']} {r['trade']} businesses in {r['city']}",
+            f"{r['found']} businesses found for “{r['trade']}” in {r['city']}",
             f"{r['with_site']} have a website, {r['audited']} audited in {r['seconds']} s. "
             "All saved to Lead List.",
             None,
@@ -268,10 +275,21 @@ def write_drafts(
         found = ["no website", "nothing for Google or Maps to show"]
         subject = f"{business} - customers searching online cannot find you"
     else:
-        top = problems[:3] or ["a few things that are costing you visitors"]
-        hook = f"I ran a quick check on {website} and found that {top[0]}."
+        # Only facts read from their page are quoted; "did not answer our check" is ours to
+        # verify, not theirs to be told.
+        top = [p for p in problems if p != UNREACHABLE][:3]
+        if top:
+            hook = f"I ran a quick check on {website} and found that {top[0]}."
+            n = len(top)
+            subject = f"{business} - {n} thing{'s' if n != 1 else ''} I noticed on your website"
+        else:
+            top = ["a few quick wins for search and AI assistants"]
+            hook = (
+                f"I have been looking at {website} and see a few quick wins that would help "
+                "more customers find you on Google and in AI assistants."
+            )
+            subject = f"{business} - a few quick wins for your website"
         found = top
-        subject = f"{business} - {len(found)} things I noticed on your website"
     bullet_lines = "\n".join(f"- {p[0].upper() + p[1:]}" for p in found)
     email = (
         f"Subject: {subject}\n\n"

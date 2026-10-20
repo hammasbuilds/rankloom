@@ -374,10 +374,21 @@ input[type=file] { font: inherit; color: var(--text-2); }
 .nowrap .btn + .btn { margin-left: 4px; }
 .table.leads select, .table.leads input { height: 32px; font-size: 13px; }
 .table.leads select { min-width: 118px; }
-.table.leads input { min-width: 150px; }
+.table.leads input { min-width: 130px; }
+.table.leads td:nth-child(4) { min-width: 230px; }
 .table.leads td:first-child { min-width: 150px; }
 .table.leads td { vertical-align: top; }
 .report-actions { margin-bottom: 12px; }
+.toolbar.wrap select { flex: 0 1 auto; min-width: 150px; }
+.check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
+.chip span { color: var(--text-3); font-variant-numeric: tabular-nums; }
+.chip:hover { background: var(--surface-2); }
+.chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); }
+.chip.on span { color: var(--accent-text); }
+.table.jobs td { vertical-align: top; }
+pre.log { background: var(--surface-2); border-radius: 8px; padding: 12px 14px; font: 12.5px/1.5 var(--mono); white-space: pre-wrap; max-height: 360px; overflow: auto; margin: 12px 0 0; }
 
 /* ---------- print: a report is the whole page ---------- */
 @media print {

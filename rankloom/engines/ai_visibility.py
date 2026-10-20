@@ -424,19 +424,42 @@ def read_answer(answer: str, brand: str, site: str) -> dict:
     mentioned = bool(brand and _norm(brand) and _norm(brand) in text_norm) or bool(
         domain and domain in answer.lower()
     )
+    brand_key = _norm(brand)
     names = []
     for m in LISTED.findall(answer) + BOLD.findall(answer):
         n = m.strip(" .")
-        if len(n.split()) <= 7 and _norm(n) and _norm(n) != _norm(brand):
+        # "Shaukat Khanum Memorial Cancer Hospital" is the brand "Shaukat Khanum", not a rival.
+        if len(n.split()) <= 7 and _norm(n) and brand_key not in _norm(n):
             names.append(n)
-    domains = [d.lower() for d in DOMAIN.findall(answer) if d.lower() != domain]
+    # A website given in the same line as the brand is the answer's address for the brand,
+    # not a competitor - and when it is not the real one, that is a finding of its own: the
+    # assistant is sending customers to the wrong address (or one that does not exist).
+    yours, wrong, domains = [], [], []
+    # One list item is one unit: "1. Shaukat Khanum ...\n   - Website: skmemorial.org" gives the
+    # brand's address on the line below its name, and line by line it read as a rival.
+    items = re.split(r"\n(?=\s{0,3}(?:\d+[.)]|[-*•])\s+\S)(?!\s{2,})", answer) if answer else [""]
+    for line in items:
+        about_brand = bool(brand_key) and brand_key in _norm(line)
+        for d in DOMAIN.findall(line):
+            d = d.lower().removeprefix("www.")
+            if d == domain:
+                yours.append(d)
+            elif about_brand:
+                wrong.append(d)
+            else:
+                domains.append(d)
     seen, competitors = set(), []
     for n in names + domains:
         key = _norm(n)
-        if key and key not in seen:
+        if key and key not in seen and key not in {_norm(w) for w in wrong}:
             seen.add(key)
             competitors.append(n)
-    return {"mentioned": mentioned, "competitors": competitors[:8]}
+    return {
+        "mentioned": mentioned,
+        "competitors": competitors[:8],
+        "site_cited": bool(yours),
+        "wrong_sites": sorted(set(wrong)),
+    }
 
 
 def answer_check(fields: dict, engine: ai.Engine) -> dict:
@@ -498,18 +521,39 @@ def run_answers(fields: dict, ctx: Context):
                 if q["mentioned"]
                 else ("no answer" if q.get("error") else "not named"),
             },
+            {"status": PASS, "text": "yours"}
+            if q.get("site_cited")
+            else {"status": FAIL, "text": "wrong: " + ", ".join(q["wrong_sites"][:2])}
+            if q.get("wrong_sites")
+            else "-",
             ", ".join(q["competitors"][:4]) or "-",
             (q["answer"][:220] + ("…" if len(q["answer"]) > 220 else "")) or q.get("error", ""),
         ]
         for q in r["rows"]
     ]
+    wrong = sorted({w for q in r["rows"] for w in q.get("wrong_sites", [])})
+    r["wrong_sites"] = wrong
     r["view"] = view(
         headline(
             f"{r['brand']} named in {r['mentioned']} of {r['answered']} answers",
             f"Mention rate {r['rate']}% · answers from the AI engine configured on this server",
             r["rate"],
         ),
-        table("Answers", ["Question", r["brand"], "Named instead", "Answer"], rows),
+        bullets(
+            "Websites the answers give for you that are not yours",
+            [
+                f"{w} - check whether it is yours; if not, customers asking an assistant are "
+                "being sent to the wrong address"
+                for w in wrong
+            ],
+            "Make your real address consistent in your site's data, Google Business Profile "
+            "and directories, so assistants learn the right one.",
+        )
+        if wrong
+        else None,
+        table(
+            "Answers", ["Question", r["brand"], "Website given", "Named instead", "Answer"], rows
+        ),
         table(
             "Named most often instead",
             ["Business", "Answers naming it"],

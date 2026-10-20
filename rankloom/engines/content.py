@@ -160,6 +160,20 @@ def expand(seed: str, country: str = "pk", deep: bool = False, budget_s: float =
         for w in re.findall(r"[a-z0-9']+", p)
         if w not in seed_words and w not in STOP and len(w) > 2
     )
+    # Two words that keep arriving together are one term: "hall road" is Lahore's electronics
+    # market, and handed over as "hall" and "road" a drafting model invented "Road Street".
+    pairs: Counter = Counter()
+    for p in unique:
+        words = [w for w in re.findall(r"[a-z0-9']+", p) if w not in seed_words and w not in STOP]
+        for a, b in zip(words, words[1:], strict=False):
+            if len(a) > 2 and len(b) > 2:
+                pairs[f"{a} {b}"] += 1
+    for pair, n in pairs.items():
+        a, b = pair.split()
+        if n >= 2 and n >= 0.6 * min(terms.get(a, n), terms.get(b, n)):
+            terms[pair] = n
+            terms.pop(a, None)
+            terms.pop(b, None)
     return {
         "seed": seed,
         "phrases": unique,
@@ -209,7 +223,18 @@ def brief(topic: str, country: str = "pk", ideas: dict | None = None) -> dict:
     questions = [
         q if q.endswith("?") else q[0].upper() + q[1:] + "?" for q in groups.get("Questions", [])
     ][:10]
-    commercial = groups.get("Comparing and buying", [])[:6]
+
+    # Phrases that only restate the topic ("<topic> today", "<topic> pakistan") name no option
+    # to compare, and listing three of them made a heading that said the topic three times.
+    def words(s: str) -> set[str]:
+        return {w.rstrip("s") for w in re.findall(r"[a-z0-9]+", s.lower())}
+
+    # Compared as word sets, plurals folded: "solar panel prices in lahore hall road" restates
+    # the topic "solar panel price in lahore" as surely as an exact copy does.
+    topic_words = words(topic)
+    commercial = [p for p in groups.get("Comparing and buying", []) if not topic_words <= words(p)][
+        :6
+    ]
     terms = [w for w, _ in ideas["terms"][:15]]
     title = topic[0].upper() + topic[1:]
     outline = [f"H1: {title}: what to know before you decide"]
@@ -263,8 +288,10 @@ def run_brief(fields: dict, ctx: Context):
 
 
 CLAIM = re.compile(
-    r"[^.!?\n]*(?:\d|%|\bRs\.?|\bPKR\b|\$|£|€|\b(?:best|only|first|largest|biggest|cheapest|"
-    r"guaranteed|always|never|proven|studies|research shows|according to)\b)[^.!?\n]*[.!?]?",
+    # "best" alone is advice ("the best solution for your budget"); "is the best" is a claim.
+    r"[^.!?\n]*(?:\d|%|\bRs\.?|\bPKR\b|\$|£|€|\b(?:(?:is|are) the best|the only|the first|"
+    r"largest|biggest|cheapest|guaranteed|always|never|proven|studies|research shows|"
+    r"according to)\b)[^.!?\n]*[.!?]?",
     re.I,
 )
 
@@ -273,7 +300,8 @@ def mark_claims(draft: str) -> list[str]:
     claims = []
     for m in CLAIM.finditer(draft):
         s = m.group(0).strip(" -*#")
-        if len(s) > 25 and not s.lower().startswith(("h1", "h2")):
+        # A question asserts nothing, and a heading is the outline, not a claim.
+        if len(s) > 12 and not s.lower().startswith(("h1", "h2")) and not s.endswith("?"):
             claims.append(s)
     return claims[:40]
 
@@ -292,7 +320,8 @@ def run_draft(fields: dict, ctx: Context):
         + "\n\nAnswer each question in the first two sentences under its heading. "
         f"Use these words where natural: {', '.join(b['terms'][:12])}. "
         f"Aim for about {b['words']} words. Do not invent statistics; where a number is needed "
-        "write [number to check]."
+        "write [number to check]. Do not name any business, shop, supplier or person, and do "
+        "not give phone numbers, addresses or websites: describe options in general terms."
         + (
             f" The article is published by {business}; mention it once, naturally, near the end."
             if business

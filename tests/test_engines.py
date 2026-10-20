@@ -439,3 +439,70 @@ def test_words_the_tool_added_to_lookups_are_not_related_terms(fake_suggest):
     r = content.expand("rooftop solar", "pk")
     words = {w for w, _ in r["terms"]}
     assert not words & {"kya", "kaise", "lahore", "karachi", "pakistan", "much", "number"}
+
+
+def test_a_website_given_beside_the_brand_is_not_a_rival_and_a_wrong_one_is_flagged():
+    answer = (
+        "1. Shaukat Khanum Memorial Cancer Hospital\n   - Website: www.skmemorial.org\n"
+        "2. Agha Khan University Hospital\n   - Website: www.aku.edu\n"
+    )
+    seen = ai_visibility.read_answer(answer, "Shaukat Khanum", "shaukatkhanum.org.pk")
+    assert seen["mentioned"]
+    assert "Shaukat Khanum Memorial Cancer Hospital" not in seen["competitors"]
+    assert "aku.edu" in seen["competitors"]
+    # The website line sits under the brand's line; it is the brand's address in the answer.
+    one = ai_visibility.read_answer(
+        "Shaukat Khanum is best - visit www.skmch.org.", "Shaukat Khanum", "shaukatkhanum.org.pk"
+    )
+    assert one["wrong_sites"] == ["skmch.org"] and "skmch.org" not in one["competitors"]
+    right = ai_visibility.read_answer(
+        "Shaukat Khanum (shaukatkhanum.org.pk).", "Shaukat Khanum", "shaukatkhanum.org.pk"
+    )
+    assert right["site_cited"] and not right["wrong_sites"]
+
+
+def test_two_words_that_travel_together_stay_one_term(monkeypatch):
+    def suggest(q, country="pk", language="en"):
+        return "google", [
+            "solar panel price hall road",
+            "solar panel hall road lahore",
+            "hall road solar market",
+            "solar panel inverter",
+        ]
+
+    monkeypatch.setattr(sources, "suggest", suggest)
+    terms = dict(content.expand("solar panel", "pk")["terms"])
+    assert "hall road" in terms and "hall" not in terms and "road" not in terms
+
+
+def test_claims_skip_questions_and_plain_advice():
+    claims = content.mark_claims(
+        "How do I find the best installer in Lahore? Find the best solution for your budget. "
+        "Sun Power is the best installer in Lahore. Panels last 25 years."
+    )
+    assert claims == ["Sun Power is the best installer in Lahore.", "Panels last 25 years."]
+
+
+def test_a_website_on_the_line_under_the_brand_belongs_to_the_brand():
+    answer = (
+        "For cancer treatment in Lahore, consider:\n\n"
+        "1. Shaukat Khanum Memorial Cancer Hospital\n   - Website: www.skmemorial.org\n\n"
+        "2. Agha Khan University Hospital\n   - Website: www.aku.edu\n"
+    )
+    seen = ai_visibility.read_answer(answer, "Shaukat Khanum", "shaukatkhanum.org.pk")
+    assert seen["wrong_sites"] == ["skmemorial.org"]
+    assert "skmemorial.org" not in seen["competitors"] and "aku.edu" in seen["competitors"]
+
+
+def test_comparison_heading_drops_phrases_that_restate_the_topic(monkeypatch):
+    def suggest(q, country="pk", language="en"):
+        return "google", [
+            "solar panel prices in lahore hall road",
+            "best solar panel brand",
+            "solar panel price in lahore today",
+        ]
+
+    monkeypatch.setattr(sources, "suggest", suggest)
+    b = content.brief("solar panel price in lahore")
+    heading = next((h for h in b["outline"] if "Comparing" in h), "")
+    assert "hall road" not in heading.lower() and "today" not in heading.lower()

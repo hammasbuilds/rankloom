@@ -216,6 +216,37 @@ def test_reset_flow_uses_the_configured_base_url_and_works_once(app):
     )
 
 
+def test_with_smtp_the_outbox_log_holds_no_working_reset_link(app, monkeypatch):
+    from rankloom import mail
+
+    sent = []
+
+    class FakeSMTP:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def starttls(self, **kw):
+            pass
+
+        def send_message(self, msg):
+            sent.append(msg.get_content())
+
+    monkeypatch.setenv("RANKLOOM_SMTP_HOST", "smtp.test")
+    monkeypatch.setattr(mail.smtplib, "SMTP", FakeSMTP)
+    register(app)
+    st, body, _ = new_client(app).post("/api/auth/forgot", {"email": "ayesha@example.com"})
+    assert st == 200 and body["delivery"] == "smtp"
+    assert re.search(r"reset\?token=[A-Za-z0-9_-]{20,}", sent[0])  # the email has the link
+    logged = app.db.one("SELECT body FROM outbox ORDER BY id DESC LIMIT 1")["body"]
+    assert "reset?token=[sent by email]" in logged and not re.search(r"token=[A-Za-z0-9_-]{20}", logged)
+
+
 def test_forgot_answers_the_same_for_unknown_emails(app):
     c = new_client(app)
     st, body, _ = c.post("/api/auth/forgot", {"email": "ghost@example.com"})
@@ -291,6 +322,38 @@ def test_turning_two_step_off_needs_password_and_code(app):
     assert c.post("/api/2fa/disable", {"password": "wrong", "code": code})[0] == 400
     assert c.post("/api/2fa/disable", {"password": GOOD_PW, "code": code})[0] == 200
     assert c.get("/api/2fa")[1]["enabled"] is False
+
+
+def test_new_recovery_codes_need_a_fresh_code_not_just_the_password(app):
+    c = register(app)
+    secret, old = enable_two_step(c)
+    for code in ("000000", "", None):
+        body = {"password": GOOD_PW} if code is None else {"password": GOOD_PW, "code": code}
+        st, reply, _ = c.post("/api/2fa/recovery", body)
+        assert st == 400 and reply["field"] == "code"
+    code = security.hotp(secret, security.totp_step() + 1)
+    st, reply, _ = c.post("/api/2fa/recovery", {"password": GOOD_PW, "code": code})
+    assert st == 200 and len(reply["recovery_codes"]) == 10 and reply["recovery_codes"] != old
+    # The code that made them is spent.
+    assert c.post("/api/2fa/recovery", {"password": GOOD_PW, "code": code})[0] == 400
+
+
+def test_password_rechecks_are_rate_limited_per_user(app):
+    c = register(app)
+    statuses = [
+        c.post("/api/account/password", {"current": "wrong", "new": "new-green-forest-77"})[0]
+        for _ in range(7)
+    ]
+    assert statuses[:6] == [400] * 6 and statuses[6] == 429
+
+
+def test_correct_sign_ins_do_not_use_up_the_address_limit(app):
+    register(app)
+    for _ in range(25):  # more than the 20 per address an office would share
+        d = new_client(app)
+        assert d.post("/api/auth/login", {"email": "ayesha@example.com", "password": GOOD_PW})[
+            0
+        ] == 200
 
 
 def test_the_totp_secret_is_sealed_in_the_database(app):
@@ -437,6 +500,30 @@ def test_lead_csv_import_update_export_and_isolation(app):
     other = register(app, email="bilal@example.com", name="Bilal")
     assert other.get("/api/leads")[1]["leads"] == []
     assert other.post("/api/leads/update", {"id": lid, "status": "won"})[0] == 404
+
+
+def test_an_exported_lead_list_imports_back_unchanged(app):
+    c = register(app)
+    c.post("/api/leads/import", {"csv": "name,website,phone,city\nAvalon,avalon.example,+44 161 224 4345,Manchester\n"})
+    lid = c.get("/api/leads")[1]["leads"][0]["id"]
+    c.post("/api/leads/update", {"id": lid, "status": "replied", "notes": "call Tuesday"})
+    app.db.run("UPDATE leads SET score = 63, problems = ? WHERE id = ?", '["no H1", "slow"]', lid)
+    _, raw, _ = c.get("/api/leads/export")
+    assert "'+44 161 224 4345" in raw  # defused for Excel on the way out
+    other = register(app, email="bilal@example.com", name="Bilal")
+    assert other.post("/api/leads/import", {"csv": raw.lstrip("﻿")})[0] == 200
+    back = other.get("/api/leads")[1]["leads"][0]
+    assert back["phone"] == "+44 161 224 4345"
+    assert back["score"] == 63 and back["problems"] == ["no H1", "slow"]
+    assert back["status"] == "replied" and back["notes"] == "call Tuesday"
+
+
+def test_an_imported_lead_without_a_website_ranks_like_a_searched_one(app):
+    from rankloom.engines.leads import opportunity
+
+    c = register(app)
+    c.post("/api/leads/import", {"csv": "name,city\nNo Site Bakery,Lahore\n"})
+    assert c.get("/api/leads")[1]["leads"][0]["score"] == opportunity({})
 
 
 def test_business_search_saves_ranked_leads(app, monkeypatch):

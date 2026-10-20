@@ -384,6 +384,9 @@ input[type=file] { font: inherit; color: var(--text-2); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
 .chip span { color: var(--text-3); font-variant-numeric: tabular-nums; }
+.more-chips { display: none; }
+.active-filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 10px; }
+.chip.removable::after { content: "×"; margin-left: 2px; color: var(--text-3); }
 .chip:hover { background: var(--surface-2); }
 .chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); }
 .chip.on span { color: var(--accent-text); }
@@ -408,6 +411,20 @@ pre.log { background: var(--surface-2); border-radius: 8px; padding: 12px 14px; 
 }
 @media (max-width: 760px) {
   .shell { grid-template-columns: minmax(0, 1fr); }
+  /* Tap targets: 26px window buttons beside the links and a 32px menu button were too small. */
+  .nav .pop { width: 40px; height: 40px; right: 0; }
+  .icon-btn { width: 44px; height: 44px; }
+  .check input[type=checkbox] { width: 20px; height: 20px; }
+  .table td a { display: inline-block; padding: 6px 0; }
+  /* Jobs as cards: a 985px table in a 316px column hid Place, Terms and Route off-screen. */
+  .table.cards thead { display: none; }
+  .table.cards, .table.cards tbody, .table.cards tr, .table.cards td { display: block; width: 100%; }
+  .table.cards tr { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; background: var(--surface); }
+  .table.cards td { border: 0; padding: 3px 0; }
+  .table.cards td[data-label]::before { content: attr(data-label) ": "; color: var(--text-3); font-size: 12px; }
+  .table.cards td:first-child { font-weight: 600; font-size: 15px; }
+  .chips.collapsible:not(.expanded) .chip:nth-child(n+9) { display: none; }
+  .more-chips { display: inline-flex; }
   .sidebar { position: fixed; inset: 0 auto 0 0; width: 272px; z-index: 40; transform: translateX(-100%); transition: transform .2s; box-shadow: var(--shadow); }
   .shell.nav-open .sidebar { transform: none; }
   .scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, .35); z-index: 30; }

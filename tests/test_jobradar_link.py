@@ -258,6 +258,30 @@ def test_jobs_filter_by_each_dimension_with_facets_that_ignore_their_own_filter(
     assert [r["company"] for r in jr.jobs({"q": "assistant director"})["rows"]] == ["PITB"]
 
 
+@pytest.mark.parametrize(("route", "kind"), [
+    ("sponsorship,europe", "open"),
+    ("remote", "open"),
+    ("pakistan", "open"),
+    ("asia", "pass"),
+    ("onsite, sponsorship not mentioned", "unclear"),
+    ("relocation offered, sponsorship unstated", "unclear"),
+    ("remote, country-locked", "closed"),
+    ("remote, region-locked, no contractor route", "closed"),
+    ("refuses sponsorship", "closed"),
+    ("citizens / nationals only", "closed"),
+])
+def test_only_a_reached_section_is_a_way_in(route, kind):
+    # "remote, country-locked" starts with "remote" and is still closed to someone abroad.
+    assert jr.route_kind(route) == kind
+
+
+def test_the_reachable_count_covers_every_match_not_one_page(radar):
+    d = jr.jobs({})
+    assert d["reachable"] == sum(jr.route_kind(r["route"]) in ("open", "pass") for r in d["rows"])
+    assert d["countries"] == len({c for r in d["rows"] for c in r["countries"]})
+    assert jr.jobs({"country": "Singapore"})["countries"] == 1
+
+
 def test_directory_and_yc(radar):
     assert jr.directory("AI work platform")[0]["name"] == "Mercor"
     assert jr.lens_family("Pakistan public sector (CS/IT/AI)")[0]["company"] == "PITB"

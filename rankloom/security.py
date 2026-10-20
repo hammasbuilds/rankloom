@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import re
 import secrets
 import struct
 import time
@@ -62,8 +63,9 @@ def password_problem(password: str, email: str = "") -> str | None:
         return "Use at most 256 characters."
     if password.lower() in _COMMON or len(set(password)) < 4:
         return "That password is too easy to guess."
-    local = email.split("@")[0].lower()
-    if local and len(local) >= 4 and local in password.lower():
+    # Compared with separators removed: "diegoreviewer1" is built from diego.reviewer@...
+    local = re.sub(r"[^a-z0-9]", "", email.split("@")[0].lower())
+    if len(local) >= 4 and local in re.sub(r"[^a-z0-9]", "", password.lower()):
         return "Do not build the password from your email address."
     return None
 

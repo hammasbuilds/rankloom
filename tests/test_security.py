@@ -57,6 +57,8 @@ def test_password_round_trip_and_unique_salts():
         ("password123", "", True),
         ("aaaaaaaaaaaa", "", True),
         ("hammas-is-great", "hammas@example.com", True),
+        ("diegoreviewer1", "diego.reviewer@example.com", True),
+        ("Diego-Reviewer!", "diego.reviewer@example.com", True),
         ("tall-orange-river-42", "a@b.co", False),
     ],
 )

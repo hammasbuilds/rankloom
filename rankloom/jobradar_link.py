@@ -39,8 +39,25 @@ REGION_NAMES = {
     "pakistan": "Pakistan",
     "asia": "East & Southeast Asia",
 }
-# A route is a value, but these two mean no route exists from Pakistan at all.
-NO_ROUTE = ("refuses sponsorship", "citizens / nationals only")
+# job-radar's route is either the sections a role reached ("sponsorship,europe") or the reason
+# it reached none ("onsite, sponsorship not mentioned"). Only the first is a way in: the old
+# test here closed just two reasons, so 534 of 577 roles read as open from Pakistan.
+SECTIONS = {"sponsorship", "remote", "europe", "gulf", "asia", "pakistan"}
+# Reasons that say nothing either way, as opposed to a stated refusal or lock.
+UNCLEAR = ("sponsorship not mentioned", "sponsorship unstated", "scope not stated",
+           "no location or route stated")
+
+
+def route_kind(route: str) -> str:
+    """open: a stated way in (sponsorship, worldwide remote, a Pakistan job). pass: a Gulf, East
+    Asia or Europe role whose employer usually arranges the work pass but did not say so.
+    unclear: the posting is silent. closed: it refuses, locks to a country, or wants citizens."""
+    parts = [p.strip() for p in (route or "").split(",")]
+    if route and all(p in SECTIONS for p in parts):
+        return "open" if {"sponsorship", "remote", "pakistan"} & set(parts) else "pass"
+    if any(u in route for u in UNCLEAR):
+        return "unclear"
+    return "closed"
 CRAWLS = {
     "jobs": (["scripts/fetch.py"], "Job boards and APIs"),
     "yc": (["scripts/fetch_yc_recent.py"], "YC batches, last three years, with LinkedIn"),
@@ -107,7 +124,8 @@ def jobs(f: dict) -> dict:
     for r in rows:
         r["countries"] = json.loads(r["countries"] or "[]")
         r["regions"] = json.loads(r["regions"] or "[]")
-        r["reachable"] = not any(r["route"].startswith(x) for x in NO_ROUTE)
+        r["route_kind"] = route_kind(r["route"])
+        r["reachable"] = r["route_kind"] in ("open", "pass")
     q = (f.get("q") or "").lower().strip()
 
     def keep(r, skip=""):
@@ -130,7 +148,7 @@ def jobs(f: dict) -> dict:
             return False
         if f.get("reachable") == "1" and not r["reachable"]:
             return False
-        if q and q not in f"{r['title']} {r['company']} {r['location']}".lower():
+        if q and q not in f"{r['title']} {r['company']} {r['location']} {r['excerpt']}".lower():
             return False
         return True
 
@@ -149,6 +167,8 @@ def jobs(f: dict) -> dict:
     return {
         "total": len(rows),
         "matched": len(shown),
+        "reachable": sum(r["reachable"] for r in shown),
+        "countries": len({c for r in shown for c in r["countries"]}),
         "rows": shown[:LIMIT],
         "facets": {
             "country": facet("countries", "country"),

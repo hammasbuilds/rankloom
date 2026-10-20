@@ -8,9 +8,13 @@ import os
 import smtplib
 import ssl
 import sys
+import re
 from email.message import EmailMessage
 
 from .db import Database, now
+
+
+_SECRET = re.compile(r"([?&]token=)[^\s&]+")
 
 
 def smtp_configured() -> bool:
@@ -18,12 +22,18 @@ def smtp_configured() -> bool:
 
 
 def send(db: Database, to: str, subject: str, body: str) -> str:
-    """Deliver or record a message. Returns 'smtp' or 'outbox'."""
+    """Deliver or record a message. Returns 'smtp' or 'outbox'.
+
+    With SMTP the outbox is only a log, so it keeps the message with its secret links blanked:
+    a database backup must not hold working reset links. Without SMTP the outbox is how the
+    link reaches the person running the server, so there it is kept whole.
+    """
+    logged = body if not smtp_configured() else _SECRET.sub(r"\1[sent by email]", body)
     db.run(
         "INSERT INTO outbox (to_email, subject, body, created_at) VALUES (?, ?, ?, ?)",
         to,
         subject,
-        body,
+        logged,
         now(),
     )
     if not smtp_configured():

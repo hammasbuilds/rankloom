@@ -8,6 +8,7 @@ lives in one place. A sub-tool marked `needs_ai` runs only when an AI engine is 
 from __future__ import annotations
 
 from . import ai
+from .engines.market import COUNTRIES
 
 
 def F(
@@ -34,6 +35,23 @@ def F(
     if accept:
         f["accept"] = accept
     return f
+
+
+def market_field(detect: bool = False) -> dict:
+    """The country searches are read for. A visible choice, never a silent default: a US dentist
+    run through Pakistani autocomplete was handed "dentist lahore"."""
+    options = [{"value": c, "label": f"{name} ({c})"} for c, name in COUNTRIES]
+    if detect:
+        options.insert(0, {"value": "", "label": "Detect from the page"})
+    return F(
+        "country",
+        "Country",
+        "select",
+        options=options,
+        hint="Where the customers are. Searches and advice are for this market."
+        if not detect
+        else "Where the business is. WhatsApp advice applies only where customers message first.",
+    )
 
 
 TOOLS: list[dict] = [
@@ -116,6 +134,7 @@ TOOLS: list[dict] = [
                 "fields": [
                     F("url", "Business page", "url", "smilecare.pk", True),
                     F("city", "City", placeholder="Lahore"),
+                    market_field(detect=True),
                 ],
             },
         ],
@@ -167,6 +186,7 @@ TOOLS: list[dict] = [
                 "fields": [
                     F("niche", "Service or product", placeholder="dentist", required=True),
                     F("city", "City", placeholder="Lahore"),
+                    market_field(),
                     F("brand", "Brand", placeholder="Smile Care Clinic"),
                 ],
             },
@@ -374,8 +394,9 @@ TOOLS: list[dict] = [
                 "name": "Keyword Ideas",
                 "tagline": "Real search phrasings, grouped by what the searcher wants.",
                 "about": (
-                    "Expands a topic through search-box autocomplete - including Pakistani "
-                    "and Roman Urdu phrasings - and groups the results into questions, "
+                    "Expands a topic through search-box autocomplete for the chosen country - "
+                    "with Roman Urdu phrasings for Pakistan - leaves out searches naming another "
+                    "country's places, and groups the results into questions, "
                     "comparing and buying, local, and learning. Autocomplete shows what people "
                     "type, not how often; no free source gives real volumes."
                 ),
@@ -388,12 +409,7 @@ TOOLS: list[dict] = [
                 "output": "Grouped real search phrasings",
                 "fields": [
                     F("seed", "Topic", placeholder="rooftop solar", required=True),
-                    F(
-                        "country",
-                        "Country code",
-                        placeholder="pk",
-                        hint="Two letters, e.g. pk, ae, gb, us.",
-                    ),
+                    market_field(),
                     F(
                         "depth",
                         "Depth",
@@ -422,7 +438,8 @@ TOOLS: list[dict] = [
                 "input": "A topic",
                 "output": "A brief a writer can follow",
                 "fields": [
-                    F("topic", "Topic", placeholder="solar panel price in lahore", required=True)
+                    F("topic", "Topic", placeholder="solar panel price in lahore", required=True),
+                    market_field(),
                 ],
             },
             {
@@ -444,6 +461,7 @@ TOOLS: list[dict] = [
                 "output": "A draft and its claims to check",
                 "fields": [
                     F("topic", "Topic", placeholder="solar panel price in lahore", required=True),
+                    market_field(),
                     F("business", "Published by", placeholder="Sun Power Lahore"),
                 ],
             },
@@ -465,6 +483,7 @@ TOOLS: list[dict] = [
                 "output": "A content score with fixes",
                 "fields": [
                     F("keyword", "Keyword", placeholder="rooftop solar lahore", required=True),
+                    market_field(),
                     F("url", "Page address", "url", "example.com/solar"),
                     F("text", "Or paste the text", "textarea"),
                 ],

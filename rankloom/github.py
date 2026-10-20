@@ -50,7 +50,7 @@ def api(token: str, path: str) -> dict | list:
     except ValueError:
         data = None
     if status == 401:
-        raise GitHubError("GitHub rejected the token. Connect the account again.", 401)
+        raise GitHubError("GitHub rejected the token. Check it, or make a new one, and try again.", 401)
     if status == 404:
         raise GitHubError("GitHub has no such repository, or the token cannot see it.", 404)
     if status >= 400:

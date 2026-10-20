@@ -96,7 +96,10 @@ CREATE TABLE IF NOT EXISTS leads (
     notes       TEXT NOT NULL DEFAULT '',
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL,
-    UNIQUE(user_id, name, website)
+    -- The address when there is no website: four Gourmet bakeries at four addresses with no
+    -- website are four leads, and keyed on (name, website) alone they became one.
+    branch      TEXT NOT NULL DEFAULT '',
+    UNIQUE(user_id, name, website, branch)
 );
 CREATE TABLE IF NOT EXISTS gsc_datasets (
     id           INTEGER PRIMARY KEY,
@@ -144,16 +147,27 @@ class Database:
             # An in-memory database exists per connection, so tests share one.
             self._shared = self._open()
         with self.connect() as c:
-            self._migrate(c)
+            rebuilt = self._migrate(c)
             c.executescript(SCHEMA)
+            if rebuilt:
+                cols = ", ".join(rebuilt)
+                c.execute(f"INSERT INTO leads ({cols}) SELECT {cols} FROM leads_v1")
+                c.execute("DROP TABLE leads_v1")
+                c.executescript(SCHEMA)  # indexes that went with the old table
 
     @staticmethod
-    def _migrate(c: sqlite3.Connection) -> None:
-        """Columns added after a database was first created."""
+    def _migrate(c: sqlite3.Connection) -> list[str]:
+        """Columns added after a database was first created. Returns the lead columns to copy
+        when the leads table had to be rebuilt for its new unique key."""
         for table, column in (("runs", "subtool"), ("events", "subtool")):
             cols = {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
             if cols and column not in cols:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
+        lead_cols = [r[1] for r in c.execute("PRAGMA table_info(leads)")]
+        if lead_cols and "branch" not in lead_cols:
+            c.execute("ALTER TABLE leads RENAME TO leads_v1")
+            return lead_cols
+        return []
 
     def _open(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)

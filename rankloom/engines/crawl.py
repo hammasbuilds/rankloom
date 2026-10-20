@@ -28,7 +28,16 @@ from .common import (
     table,
     view,
 )
-from .site_audit import normalise_url, parse_page
+from .site_audit import (
+    SPEED_CAVEAT,
+    SPEED_GOOD_MS,
+    SPEED_SLOW_MS,
+    blocked_result,
+    blocked_view,
+    challenge,
+    normalise_url,
+    parse_page,
+)
 
 SKIP_EXT = re.compile(
     r"\.(pdf|jpe?g|png|gif|webp|svg|ico|zip|rar|gz|mp4|mp3|webm|avi|docx?|xlsx?|pptx?|css|js|xml|txt|json)$",
@@ -85,6 +94,12 @@ def crawl(start: str, fetch, max_pages: int = 25, budget_s: float = 75.0) -> dic
     t0 = time.monotonic()
     first = fetch(start)
     home = first.url
+    first_page = (
+        parse_page(first.text()) if "html" in first.headers.get("content-type", "") else None
+    )
+    blocked = challenge(first, first_page)
+    if blocked:
+        return blocked_result(start, first, blocked)
     origin = f"{urlsplit(home).scheme}://{urlsplit(home).netloc}"
     try:
         rr = fetch(origin + "/robots.txt")
@@ -110,10 +125,12 @@ def crawl(start: str, fetch, max_pages: int = 25, budget_s: float = 75.0) -> dic
             "words": 0,
             "noindex": False,
             "html": "html" in resp.headers.get("content-type", ""),
+            "blocked": "",
         }
         out: list[str] = []
-        if info["html"] and resp.status == 200:
-            page = parse_page(resp.text())
+        page = parse_page(resp.text()) if info["html"] else None
+        info["blocked"] = challenge(resp, page)
+        if page is not None and resp.status == 200 and not info["blocked"]:
             info.update(
                 title=page.title or "",
                 description=page.meta.get("description", ""),
@@ -172,6 +189,7 @@ def crawl(start: str, fetch, max_pages: int = 25, budget_s: float = 75.0) -> dic
                         "words": 0,
                         "noindex": False,
                         "html": False,
+                        "blocked": "",
                     }
                     continue
                 frontier.extend(record(url, resp))
@@ -193,8 +211,20 @@ def crawl(start: str, fetch, max_pages: int = 25, budget_s: float = 75.0) -> dic
     }
 
 
+TITLE_MAX = 60
+
+
+def _paths(items: list[dict], n: int = 3) -> str:
+    """The pages a finding is about, so "1 of 25" can be found without opening every page."""
+    if not items:
+        return ""
+    shown = ", ".join(urlsplit(p["url"]).path or "/" for p in items[:n])
+    return f": {shown}" + (f" and {len(items) - n} more" if len(items) > n else "")
+
+
 def analyse(result: dict) -> list[dict]:
-    pages = result["pages"]
+    pages = [p for p in result["pages"] if not p.get("blocked")]
+    walled = [p for p in result["pages"] if p.get("blocked")]
     ok = [p for p in pages if p["status"] == 200 and p["html"]]
     broken = [p for p in pages if p["status"] >= 400 or p["status"] == 0]
     titles = Counter(p["title"] for p in ok if p["title"])
@@ -206,21 +236,23 @@ def analyse(result: dict) -> list[dict]:
     bad_h1 = [p for p in ok if p["h1"] != 1]
     noindex = [p for p in ok if p["noindex"]]
     thin = [p for p in ok if p["words"] < 300]
-    slow = [p for p in pages if p["ms"] > 2500]
+    long_title = [p for p in ok if len(p["title"]) > TITLE_MAX]
+    slow = [p for p in pages if p["ms"] >= SPEED_SLOW_MS]
+    sluggish = [p for p in pages if SPEED_GOOD_MS <= p["ms"] < SPEED_SLOW_MS]
     hops = [p for p in pages if p["hops"] > 1]
     n = max(len(ok), 1)
 
     def share(items):
         return f"{len(items)} of {len(ok)} pages"
 
-    def status_for(items, warn_share=0.0, fail_share=0.3):
+    def status_for(items, fail_share=0.3):
+        # A problem the crawl found is never a pass: "Pass - 1 of 25 pages have no description"
+        # contradicted itself. A few pages warn; a large share fails.
         if not items:
             return PASS
-        return (
-            FAIL if len(items) / n > fail_share else WARN if len(items) / n > warn_share else PASS
-        )
+        return FAIL if len(items) / n > fail_share else WARN
 
-    return [
+    found = [
         check(
             "broken",
             "No broken pages",
@@ -249,47 +281,67 @@ def analyse(result: dict) -> list[dict]:
         check(
             "no-title",
             "Every page has a title",
-            status_for(no_title, 0, 0.1),
-            share(no_title) + " have no title.",
+            status_for(no_title, 0.1),
+            share(no_title) + " have no title" + _paths(no_title) + ".",
             "Add a <title> to each page.",
             3,
         ),
         check(
             "no-desc",
             "Every page has a description",
-            status_for(no_desc, 0.2, 0.5),
-            share(no_desc) + " have no meta description.",
+            status_for(no_desc, 0.5),
+            share(no_desc) + " have no meta description" + _paths(no_desc) + ".",
             "Add a 70-160 character description to each page.",
             2,
         ),
         check(
             "h1",
             "One H1 per page",
-            status_for(bad_h1, 0.2, 0.5),
-            share(bad_h1) + " have no H1 or more than one.",
+            status_for(bad_h1, 0.5),
+            share(bad_h1) + " have no H1 or more than one" + _paths(bad_h1) + ".",
             "Give each page exactly one H1.",
         ),
         check(
             "noindex",
             "Pages are indexable",
             WARN if noindex else PASS,
-            share(noindex) + " say noindex.",
+            share(noindex) + " say noindex" + _paths(noindex) + ".",
             "Remove noindex from any page that should appear in search.",
             2,
         ),
         check(
             "thin",
             "Pages have enough text",
-            status_for(thin, 0, 0.7),
-            share(thin) + " have under 300 words.",
+            status_for(thin, 0.7),
+            share(thin) + " have under 300 words" + _paths(thin) + ".",
             "Expand thin pages or merge them into stronger ones.",
+        ),
+        check(
+            "long-title",
+            f"Titles are {TITLE_MAX} characters or fewer",
+            status_for(long_title, 0.5),
+            share(long_title)
+            + f" have a title over {TITLE_MAX} characters"
+            + (
+                f" (longest {max(len(p['title']) for p in long_title)}: "
+                f'"{max(long_title, key=lambda p: len(p["title"]))["title"][:90]}...")'
+                if long_title
+                else ""
+            )
+            + ".",
+            "Search results cut titles at about 60 characters; lead with the page's topic and "
+            "drop repeated keywords.",
         ),
         check(
             "slow",
             "Pages respond quickly",
-            status_for(slow, 0.1, 0.4),
-            f"{len(slow)} of {len(pages)} pages took over 2.5 s.",
-            "Cache pages and use faster hosting or a CDN.",
+            FAIL if len(slow) / max(len(pages), 1) > 0.4 else WARN if slow or sluggish else PASS,
+            f"{len(slow)} of {len(pages)} pages took {SPEED_SLOW_MS / 1000:g} s or more and "
+            f"{len(sluggish)} more took over {SPEED_GOOD_MS} ms, {SPEED_CAVEAT}"
+            + _paths(sorted(slow + sluggish, key=lambda p: -p["ms"]))
+            + ".",
+            "Confirm with a speed test first; if it holds, cache pages and use faster hosting "
+            "or a CDN.",
             2,
         ),
         check(
@@ -300,6 +352,19 @@ def analyse(result: dict) -> list[dict]:
             "Update internal links to the final address.",
         ),
     ]
+    if walled:
+        found.append(
+            check(
+                "walled",
+                "Pages readable by crawlers",
+                WARN,
+                f"{len(walled)} page(s) answered with a bot check instead of the page"
+                + _paths(walled)
+                + "; they are left out of every other check.",
+                "Ask the host to let search crawlers through the bot protection on these pages.",
+            )
+        )
+    return found
 
 
 def run(fields: dict, ctx: Context) -> tuple[str, int, dict]:
@@ -308,6 +373,13 @@ def run(fields: dict, ctx: Context) -> tuple[str, int, dict]:
     except ValueError:
         limit = 25
     result = crawl(str(fields.get("url", "")), ctx.fetch, max_pages=limit)
+    if result.get("blocked"):
+        result["view"] = blocked_view(result, "site")
+        return (
+            f"{result['final_url']}: could not read the real site ({result['blocked']})",
+            None,
+            result,
+        )
     items = sort_checks(analyse(result))
     score, counts = score_checks(items)
     read = len(result["pages"])
@@ -323,18 +395,22 @@ def run(fields: dict, ctx: Context) -> tuple[str, int, dict]:
         issues = []
         if p["status"] != 200:
             issues.append(f"answered {p['status'] or 'nothing'}")
-        if p["status"] == 200 and p["html"]:
+        if p.get("blocked"):
+            issues.append("bot check")
+        elif p["status"] == 200 and p["html"]:
             if not p["title"]:
                 issues.append("no title")
             if not p["description"]:
                 issues.append("no description")
             if p["h1"] != 1:
                 issues.append(f"{p['h1']} H1")
+            if len(p["title"]) > TITLE_MAX:
+                issues.append("long title")
             if p["words"] < 300:
                 issues.append("thin")
             if p["noindex"]:
                 issues.append("noindex")
-        if p["ms"] > 2500:
+        if p["ms"] >= SPEED_SLOW_MS:
             issues.append("slow")
         st = PASS if not issues else FAIL if p["status"] != 200 else WARN
         rows.append(
@@ -354,7 +430,7 @@ def run(fields: dict, ctx: Context) -> tuple[str, int, dict]:
             ", ".join(result["linked_from"].get(p["url"], [])) or "sitemap",
         ]
         for p in result["pages"]
-        if p["status"] >= 400 or p["status"] == 0
+        if (p["status"] >= 400 or p["status"] == 0) and not p.get("blocked")
     ]
     out = {**result, "checks": items, "score": score, "counts": counts}
     out["view"] = view(

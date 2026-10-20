@@ -5,7 +5,9 @@ a map, the Google Business Profile, reviews, hours, WhatsApp."""
 from __future__ import annotations
 
 import re
+from urllib.parse import urlsplit
 
+from . import market
 from .common import (
     FAIL,
     PASS,
@@ -19,7 +21,14 @@ from .common import (
     sort_checks,
     view,
 )
-from .site_audit import jsonld_objects, normalise_url, parse_page
+from .site_audit import (
+    blocked_result,
+    blocked_view,
+    challenge,
+    jsonld_objects,
+    normalise_url,
+    parse_page,
+)
 
 # schema.org LocalBusiness and the subtypes small businesses actually use
 LOCAL_TYPES = {
@@ -79,7 +88,10 @@ LOCAL_TYPES = {
     "governmentoffice",
     "library",
 }
-PHONE = re.compile(r"(?:\+?\d[\d\s().-]{7,}\d)")
+# The opening bracket belongs to the number ("(716) 689-8882"), and a number never runs across a
+# line break: "716)\n689-8882\n777" was a phone, then the street number of the next line. Nor
+# does it start inside another number: "24/7 512-400-0749" is not "7 512-400-0749".
+PHONE = re.compile(r"(?<![\w/])(?:\+|\()?\d[\d \t().-]{7,}\d")
 MAP_HINTS = (
     "google.com/maps",
     "maps.google",
@@ -97,13 +109,75 @@ PROFILE_HINTS = (
     "search.google.com/local",
     "business.google.com",
 )
+# Pages where reviews are read or written. A plain Facebook page is not one: it passed Pizzeria
+# Bianco's review check on facebook.com/biancorestaurants/ alone.
 REVIEW_HINTS = (
     "writereview",
     "search.google.com/local/reviews",
     "trustpilot.com",
-    "yelp.com",
-    "facebook.com/",
-) + ("g.page",)
+    "yelp.",
+    "tripadvisor.",
+    "zocdoc.com",
+    "healthgrades.com",
+    "opentable.com",
+    "/review",
+)
+# Calling codes and domain endings that say which country a business is in.
+CALLING = (
+    ("+971", "ae"),
+    ("+966", "sa"),
+    ("+974", "qa"),
+    ("+965", "kw"),
+    ("+973", "bh"),
+    ("+968", "om"),
+    ("+353", "ie"),
+    ("+92", "pk"),
+    ("+44", "gb"),
+    ("+91", "in"),
+    ("+60", "my"),
+    ("+65", "sg"),
+    ("+61", "au"),
+    ("+64", "nz"),
+    ("+49", "de"),
+    ("+33", "fr"),
+    ("+34", "es"),
+    ("+31", "nl"),
+    ("+1", "us"),
+)
+TLD = {"uk": "gb", **{c: c for c in market.NAMES if c not in ("us", "gb")}}
+US_STATES = set(
+    "al ak az ar ca co ct de fl ga hi id il in ia ks ky la me md ma mi mn ms mo mt ne nv nh nj "
+    "nm ny nc nd oh ok or pa ri sc sd tn tx ut vt va wa wv wi wy dc".split()
+)
+
+
+def detect_country(biz: dict | None, tel_links: list[str], final_url: str) -> tuple[str, str]:
+    """(country code, how it was found), or ("", "") when the page does not say."""
+    addr = (biz or {}).get("address") or {}
+    if isinstance(addr, list):
+        addr = addr[0] if addr else {}
+    if isinstance(addr, dict):
+        c = addr.get("addressCountry")
+        c = (c.get("name") or c.get("@id") or "") if isinstance(c, dict) else str(c or "")
+        low = c.strip().lower()
+        by_name = {n.lower(): k for k, n in market.NAMES.items()}
+        hit = low if low in market.NAMES else "gb" if low == "uk" else by_name.get(low, "")
+        if hit:
+            return hit, "the address data"
+        if str(addr.get("addressRegion", "")).strip().lower() in US_STATES:
+            return "us", "the state in the address data"
+    for number in [str((biz or {}).get("telephone", ""))] + [t[4:] for t in tel_links]:
+        n = re.sub(r"[^\d+]", "", number)
+        if n.startswith("00"):
+            n = "+" + n[2:]
+        for prefix, cc in CALLING:
+            if n.startswith(prefix):
+                return cc, "the phone number's country code"
+    host = urlsplit(final_url).hostname or ""
+    tld = host.rsplit(".", 1)[-1]
+    if tld in TLD:
+        return TLD[tld], f"the .{tld} web address"
+    return "", ""
 
 
 def _digits(s: str) -> str:
@@ -121,10 +195,13 @@ def _types(obj: dict) -> set[str]:
     return {str(x).lower() for x in items if x}
 
 
-def audit(url: str, city: str, fetch) -> dict:
+def audit(url: str, city: str, fetch, country: str = "") -> dict:
     url = normalise_url(url)
     resp = fetch(url)
     page = parse_page(resp.text())
+    blocked = challenge(resp, page)
+    if blocked:
+        return {**blocked_result(url, resp, blocked), "business": None, "market": ""}
     text = page.text
     lowered_links = [h.lower() for h in page.anchors]
     objs = jsonld_objects(page.jsonld)
@@ -189,7 +266,10 @@ def audit(url: str, city: str, fetch) -> dict:
         )
     )
 
-    phones = [p for p in PHONE.findall(text) if 9 <= len(re.sub(r"\D", "", p)) <= 15]
+    phones = [
+        " ".join(p.split()) for p in PHONE.findall(text) if 9 <= len(re.sub(r"\D", "", p)) <= 15
+    ]
+    phones = list(dict.fromkeys(phones))
     tel_links = [h for h in page.anchors if h.lower().startswith("tel:")]
     items.append(
         check(
@@ -211,7 +291,8 @@ def audit(url: str, city: str, fetch) -> dict:
             "Click-to-call link",
             PASS if tel_links else WARN,
             tel_links[0] if tel_links else "No tel: link.",
-            'Wrap the number in <a href="tel:+92...">, so a phone visitor can call in one tap.',
+            'Wrap the number in <a href="tel:+...">, with the country code, so a phone visitor '
+            "can call in one tap.",
         )
     )
 
@@ -315,16 +396,25 @@ def audit(url: str, city: str, fetch) -> dict:
             "List your Facebook, Instagram and LinkedIn pages in sameAs.",
         )
     )
-    wa = [h for h in lowered_links if "wa.me/" in h or "api.whatsapp.com" in h]
-    items.append(
-        check(
-            "whatsapp",
-            "WhatsApp contact link",
-            PASS if wa else WARN,
-            wa[0] if wa else "No WhatsApp link.",
-            "Add a wa.me link; in Pakistan and the Gulf many customers message before calling.",
-        )
+    chosen = (country or "").strip().lower()
+    cc, how = (
+        (chosen, "your choice")
+        if chosen in market.NAMES
+        else detect_country(biz, tel_links, resp.url)
     )
+    # WhatsApp is how customers reach a business first in Pakistan and the Gulf, not in the US
+    # or the UK; telling a dentist in New York to add it cost points and reached their report.
+    wa = [h for h in lowered_links if "wa.me/" in h or "api.whatsapp.com" in h]
+    if cc in market.WHATSAPP_FIRST:
+        items.append(
+            check(
+                "whatsapp",
+                "WhatsApp contact link",
+                PASS if wa else WARN,
+                wa[0] if wa else "No WhatsApp link.",
+                f"Add a wa.me link; in {market.NAMES[cc]} many customers message before calling.",
+            )
+        )
     if city:
         c = city.lower()
         where = [
@@ -354,6 +444,8 @@ def audit(url: str, city: str, fetch) -> dict:
         "score": score,
         "counts": counts,
         "checks": items,
+        "market": cc,
+        "market_how": how,
         "business": {
             "name": (biz or org or {}).get("name", ""),
             "phone": phones[:3],
@@ -364,8 +456,21 @@ def audit(url: str, city: str, fetch) -> dict:
 
 
 def run(fields: dict, ctx: Context) -> tuple[str, int, dict]:
-    r = audit(str(fields.get("url", "")), str(fields.get("city", "")).strip(), ctx.fetch)
+    r = audit(
+        str(fields.get("url", "")),
+        str(fields.get("city", "")).strip(),
+        ctx.fetch,
+        str(fields.get("country", "")),
+    )
+    if r.get("blocked"):
+        r["view"] = blocked_view(r, "business page")
+        return f"{r['final_url']}: could not read the real page ({r['blocked']})", None, r
     b = r["business"]
+    where = (
+        f"{market.NAMES[r['market']]} (from {r['market_how']})"
+        if r["market"]
+        else "Not stated on the page - choose the country to check WhatsApp advice"
+    )
     r["view"] = view(
         headline(r["final_url"], "Local search and maps readiness", r["score"], r["counts"]),
         facts(
@@ -375,6 +480,7 @@ def run(fields: dict, ctx: Context) -> tuple[str, int, dict]:
                 ("Phone on page", ", ".join(b["phone"]) or "-"),
                 ("Phone in data", b["data_phone"] or "-"),
                 ("Address in data", b["address"] or "-"),
+                ("Country", where),
             ],
         ),
         checks("Checks", r["checks"]),

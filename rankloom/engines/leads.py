@@ -9,6 +9,7 @@ businesses had a website, and a business without one is itself a lead.
 from __future__ import annotations
 
 import json
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlsplit
@@ -70,9 +71,14 @@ QUICK = (
 )
 
 
+HTTPS_NO_REDIRECT = (
+    "visitors who type the plain address are not sent to the secure (padlock) version of the site"
+)
 # A site that did not answer *this* server may be up for everyone else (a timeout here is often
 # the connection, not the site). It is shown to you as a thing to check, never quoted to them.
 UNREACHABLE = "the website did not answer our check - open it in a browser before mentioning it"
+# A bot check answered instead of the site: what it shows says nothing about their website.
+BLOCKED = "the website showed our check a bot-protection page - open it in a browser instead"
 
 
 def quick_audit(url: str, fetch) -> dict:
@@ -85,13 +91,34 @@ def quick_audit(url: str, fetch) -> dict:
             "problems": [UNREACHABLE],
             "score": 0,
         }
+    if r.get("blocked"):
+        return {
+            "reachable": False,
+            "blocked": True,
+            "error": r["blocked"],
+            "problems": [BLOCKED],
+            "score": 0,
+        }
     bad = [c for c in r["checks"] if c["status"] != PASS and c["id"] in QUICK]
     bad.sort(key=lambda c: (c["status"] != FAIL, -c["weight"]))
+    # The listed http:// address not redirecting does not mean there is no padlock: Brooklyn
+    # Court's https:// site worked. Ask once before saying the site is not secure.
+    secure_works = False
+    if any(c["id"] == "https" and c["status"] == FAIL for c in bad):
+        host = urlsplit(r.get("final_url") or url).netloc
+        try:
+            secure = audit(f"https://{host}/", fetch=fetch)
+            secure_works = not secure.get("blocked") and urlsplit(
+                secure.get("final_url", "")).scheme == "https"
+        except (FetchFailed, FetchRefused):
+            secure_works = False
     problems = []
     for c in bad:
         # A warning is a milder fact than a failure; quoting the failure's sentence for it would
         # tell an owner something untrue (a missing robots.txt does not block search engines).
         said = PLAIN.get(c["id"]) if c["status"] == FAIL else WARN_PLAIN.get(c["id"])
+        if c["id"] == "https" and secure_works:
+            said = HTTPS_NO_REDIRECT
         if said:
             problems.append(said)
     return {
@@ -109,6 +136,8 @@ def opportunity(lead: dict) -> int:
     A business the directory lists without a website is not proven to lack one - chains often
     just have no website tag - so it ranks as a lead to check, below a website we checked and
     found weak."""
+    if lead.get("chain_site"):
+        return 15  # a branch of a chain whose website we found: the brand runs its site
     if not lead.get("website"):
         return 50
     qa = lead.get("audit") or {}
@@ -119,10 +148,14 @@ def opportunity(lead: dict) -> int:
 
 def save_lead(db, user_id: int, lead: dict) -> int:
     t = now()
+    # Branches that share a website are one lead (one site to fix); without one, each address
+    # is its own business.
+    branch = "" if lead.get("website") else lead.get("address", "")[:300]
     db.run(
         "INSERT INTO leads (user_id, name, category, website, phone, email, address, city, "
-        "source, score, problems, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
-        "ON CONFLICT(user_id, name, website) DO UPDATE SET score = excluded.score, "
+        "source, score, problems, created_at, updated_at, branch) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(user_id, name, website, branch) DO UPDATE SET score = excluded.score, "
         "problems = excluded.problems, phone = CASE WHEN excluded.phone != '' THEN excluded.phone "
         "ELSE leads.phone END, updated_at = excluded.updated_at",
         user_id,
@@ -138,12 +171,14 @@ def save_lead(db, user_id: int, lead: dict) -> int:
         json.dumps(lead.get("problems", [])),
         t,
         t,
+        branch,
     )
     row = db.one(
-        "SELECT id FROM leads WHERE user_id = ? AND name = ? AND website = ?",
+        "SELECT id FROM leads WHERE user_id = ? AND name = ? AND website = ? AND branch = ?",
         user_id,
         lead["name"][:200],
         lead.get("website", "")[:300],
+        branch,
     )
     return row["id"]
 
@@ -179,10 +214,30 @@ def search(
             if qa is not None:
                 b["audit"] = qa
                 audited += 1
+    # A branch with no website of its own is usually a chain whose site another branch lists,
+    # or whose brand tag names it: telling Gourmet or mydentist "I could not find your website"
+    # is false and burns the lead.
+    sites_by_name: dict[str, str] = {}
+    for b in with_site:
+        for key in (b["name"], b.get("brand", "")):
+            if key:
+                sites_by_name.setdefault(key.strip().lower(), b["website"])
+    for b in found:
+        if not b["website"]:
+            b["chain_site"] = (
+                b.get("brand_website")
+                or sites_by_name.get(b["name"].strip().lower())
+                or sites_by_name.get((b.get("brand") or "").strip().lower())
+                or ""
+            )
     for b in found:
         if b.get("region"):
             b["address"] = ", ".join(x for x in (b.get("address", ""), b["region"]) if x)
-        if not b["website"]:
+        if b.get("chain_site"):
+            b["problems"] = [
+                f"a branch of a chain - its website is probably {b['chain_site']} (check first)"
+            ]
+        elif not b["website"]:
             b["problems"] = ["website not listed in the directory (check before contacting)"]
         elif b.get("audit"):
             b["problems"] = b["audit"]["problems"]
@@ -237,6 +292,17 @@ def run_search(fields: dict, ctx: Context):
                 else "",
             ]
         )
+    if not r["found"]:
+        r["view"] = view(
+            headline(
+                f"No businesses found for “{r['trade']}” in {r['city']}",
+                "OpenStreetMap lists none under that word. Try the trade's other names "
+                "(plumber, plumbing, plumbing services), a neighbourhood or nearby city, or the "
+                "country left empty. Coverage is thin in some cities.",
+                None,
+            ),
+        )
+        return f"0 {r['trade']} leads in {r['city']}", None, r
     r["view"] = view(
         headline(
             f"{r['found']} businesses found for “{r['trade']}” in {r['city']}",
@@ -262,48 +328,61 @@ def run_search(fields: dict, ctx: Context):
 # --- outreach ----------------------------------------------------------------------------------
 
 
+# Where "Assalam o Alaikum" is the ordinary greeting; elsewhere it reads as a stranger guessing.
+SALAAM = re.compile(
+    r"\b(?:pakistan|united arab emirates|uae|saudi arabia|qatar|kuwait|bahrain|oman|lahore|"
+    r"karachi|islamabad|rawalpindi|faisalabad|peshawar|multan|dubai|abu dhabi|sharjah|riyadh|"
+    r"jeddah|doha|muscat)\b", re.I)
+
+
 def write_drafts(
-    business: str, website: str, problems: list[str], sender: str, offer: str
+    business: str, website: str, problems: list[str], sender: str, offer: str, where: str = ""
 ) -> list[dict]:
     sender = sender or "[your name]"
     offer = offer or "a free 15-minute walkthrough of the full audit"
+    greeting = "Assalam o Alaikum!" if SALAAM.search(where or "") else f"Hi {business},"
     if not website:
+        # "Not listed" is what we know; "you have no website" and "nothing on Maps" are not -
+        # the lead itself came from a map, and chains keep one central site.
         hook = (
-            f"I looked for {business}'s website and could not find one - which means "
-            "anyone searching for what you offer finds your competitors first."
+            f"I could not find a website listed for {business}, and people who search for what "
+            "you offer may be finding your competitors first."
         )
-        found = ["no website", "nothing for Google or Maps to show"]
-        subject = f"{business} - customers searching online cannot find you"
+        found = ["no website listed where customers look for you"]
+        subject = f"{business} - is there a website customers can find?"
     else:
         # Only facts read from their page are quoted; "did not answer our check" is ours to
         # verify, not theirs to be told.
-        top = [p for p in problems if p != UNREACHABLE][:3]
-        if top:
-            hook = f"I ran a quick check on {website} and found that {top[0]}."
-            n = len(top)
+        found = [p for p in problems if p not in (UNREACHABLE, BLOCKED)][:3]
+        if found:
+            hook = f"I ran a quick check on {website} and found that {found[0]}."
+            n = len(found)
             subject = f"{business} - {n} thing{'s' if n != 1 else ''} I noticed on your website"
         else:
-            top = ["a few quick wins for search and AI assistants"]
+            # Nothing was found, so nothing is claimed: no "quick wins", no "fixable".
             hook = (
-                f"I have been looking at {website} and see a few quick wins that would help "
-                "more customers find you on Google and in AI assistants."
+                f"I came across {website}. I help local businesses get found on Google and in "
+                "AI assistants."
             )
-            subject = f"{business} - a few quick wins for your website"
-        found = top
-    bullet_lines = "\n".join(f"- {p[0].upper() + p[1:]}" for p in found)
+            subject = f"{business} - help getting found online"
+    if found:
+        body = (
+            f"{hook}\n\nWhat I found:\n"
+            + "\n".join(f"- {p[0].upper() + p[1:]}" for p in found)
+            + "\n\nEach of these is fixable, usually within a week. "
+            f"I would be glad to offer {offer}, with no obligation."
+        )
+        share = "I put together the full list of fixes; happy to share it free if useful."
+    else:
+        body = f"{hook} If it would help, I would be glad to offer {offer}, with no obligation."
+        share = "Happy to share a short free review if useful."
     email = (
         f"Subject: {subject}\n\n"
-        f"Hi {business} team,\n\n{hook}\n\nWhat I found:\n{bullet_lines}\n\n"
-        f"Each of these is fixable, usually within a week. I would be glad to offer {offer}, "
-        f"with no obligation.\n\nWould a short call this week suit you?\n\n{sender}"
+        f"Hi {business} team,\n\n{body}\n\nWould a short call this week suit you?\n\n{sender}"
     )
-    short = (
-        f"Hi {business} - {hook} I put together the full list of fixes; happy to share it "
-        f"free if useful. - {sender}"
-    )
+    short = f"Hi {business} - {hook} {share} - {sender}"
     whatsapp = (
-        f"Assalam o Alaikum! {hook} I can send you the full report free of charge - "
-        f"shall I share it here? - {sender}"
+        f"{greeting} {hook} {share} Shall I send it here? - {sender}"
     )
     return [
         {"label": "Email", "text": email},
@@ -332,14 +411,23 @@ def run_outreach(fields: dict, ctx: Context):
             normalise_url(website if "://" in website else "https://" + website), ctx.fetch
         )
         problems, checked = qa["problems"], True
+        if not qa["reachable"] and lead:
+            # A check that could not read the site found nothing out; keep what the last good
+            # check found rather than wiping it.
+            problems = [p for p in json.loads(lead["problems"]) if p not in problems] + problems
     elif lead:
         problems = json.loads(lead["problems"])
+    where = " ".join(
+        str(x) for x in (fields.get("country", ""), lead["address"] if lead else "",
+                         lead["city"] if lead else "") if x
+    )
     items = write_drafts(
         business,
         website,
         problems,
         str(fields.get("sender", "")).strip(),
         str(fields.get("offer", "")).strip(),
+        where,
     )
     if lead is not None and ctx.db is not None:
         ctx.db.run(

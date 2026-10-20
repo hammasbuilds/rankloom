@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .. import ai, sources
 from ..netguard import FetchFailed, FetchRefused
+from . import market
 from .common import (
     FAIL,
     PASS,
@@ -103,13 +104,46 @@ def intent(phrase: str) -> str:
         return "Questions"
     if any(f" {w} " in p for w in COMMERCIAL):
         return "Comparing and buying"
-    if any(w in p for w in LOCAL):
+    if any(w in p for w in LOCAL) or market.names_a_place(phrase):
         return "Local"
     return "Learning"
 
 
-def expand(seed: str, country: str = "pk", deep: bool = False, budget_s: float = 45.0) -> dict:
+# Short words a title keeps in capitals: states, countries and the usual initialisms.
+_UPPER = set(
+    "ny nyc la dc uk us usa uae ksa nhs pk ai seo ppc tv ac hvac diy faq sms gp ca tx fl nj pa "
+    "il oh ga nc va wa ma az co mi mn mo md wi tn ct ok sc ky or".split()
+)
+_SMALL = {"a", "an", "and", "as", "at", "by", "for", "in", "of", "on", "or", "the", "to", "vs"}
+
+
+def title_case(phrase: str) -> str:
+    """'emergency dentist williamsville ny' -> 'Emergency Dentist Williamsville NY'."""
+    out = []
+    for i, w in enumerate(phrase.split()):
+        low = w.lower()
+        if low in _UPPER:
+            out.append(low.upper())
+        elif i and low in _SMALL:
+            out.append(low)
+        elif w[:1].islower():
+            out.append(w[:1].upper() + w[1:])
+        else:
+            out.append(w)
+    return " ".join(out)
+
+
+def flat(s: str) -> str:
+    """Lower-case words with punctuation removed, so "Williamsville, NY" reads as
+    "williamsville ny" - a keyword is matched as words, not as exact characters."""
+    return " ".join(re.findall(r"[a-z0-9؀-ۿ']+", s.lower()))
+
+
+def expand(
+    seed: str, country: str = "pk", deep: bool = False, budget_s: float = 45.0, city: str = ""
+) -> dict:
     seed = " ".join(seed.split())
+    country = market.code(country)
     if not seed:
         raise InputProblem("Enter a topic, e.g. rooftop solar.")
     lookups = [seed] + [
@@ -142,11 +176,17 @@ def expand(seed: str, country: str = "pk", deep: bool = False, budget_s: float =
                 phrases.extend(res[1])
     seen, unique = set(), []
     head = seed.lower().split()[0]
+    dropped = 0
     for p in phrases:
         k = " ".join(p.lower().split())
-        if k not in seen and head in k:
-            seen.add(k)
-            unique.append(k)
+        if k in seen or head not in k:
+            continue
+        seen.add(k)
+        # "emergency dentist prices nhs" is a real search - in another market.
+        if market.foreign(k, country, city):
+            dropped += 1
+            continue
+        unique.append(k)
     groups: dict[str, list[str]] = {}
     for p in unique:
         groups.setdefault(intent(p), []).append(p)
@@ -181,6 +221,8 @@ def expand(seed: str, country: str = "pk", deep: bool = False, budget_s: float =
         "terms": terms.most_common(25),
         "asked": len(lookups),
         "answered": answered,
+        "country": country,
+        "other_market": dropped,
         "provider": providers.most_common(1)[0][0] if providers else "",
     }
 
@@ -188,7 +230,7 @@ def expand(seed: str, country: str = "pk", deep: bool = False, budget_s: float =
 def run_keywords(fields: dict, ctx: Context):
     r = expand(
         str(fields.get("seed", "")),
-        str(fields.get("country", "pk") or "pk").strip(),
+        market.code(str(fields.get("country", ""))),
         str(fields.get("depth", "")).lower() in ("deep", "on", "true", "1"),
     )
     order = ["Questions", "Comparing and buying", "Local", "Learning"]
@@ -199,8 +241,14 @@ def run_keywords(fields: dict, ctx: Context):
     r["view"] = view(
         headline(
             f"{len(r['phrases'])} real searches around “{r['seed']}”",
-            f"{r['answered']} of {r['asked']} lookups answered"
+            f"Searches in {market.NAMES[r['country']]} · {r['answered']} of {r['asked']} lookups "
+            "answered"
             + (f", from {r['provider']}" if r["provider"] else "")
+            + (
+                f"; {r['other_market']} naming another country's places left out"
+                if r["other_market"]
+                else ""
+            )
             + ". Autocomplete shows what people type, not how often.",
         ),
         *[
@@ -236,7 +284,7 @@ def brief(topic: str, country: str = "pk", ideas: dict | None = None) -> dict:
         :6
     ]
     terms = [w for w, _ in ideas["terms"][:15]]
-    title = topic[0].upper() + topic[1:]
+    title = title_case(topic)
     outline = [f"H1: {title}: what to know before you decide"]
     outline += [f"H2: {q}" for q in questions[:5]]
     if commercial:
@@ -260,11 +308,13 @@ def run_brief(fields: dict, ctx: Context):
     topic = " ".join(str(fields.get("topic", "")).split())
     if not topic:
         raise InputProblem("Enter the topic or main keyword.")
-    b = brief(topic)
+    country = market.code(str(fields.get("country", "")))
+    b = brief(topic, country)
     b["view"] = view(
         headline(
             f"Brief: {topic}",
-            f"From {len(b['ideas']['phrases'])} real searches · aim for about {b['words']:,} words",
+            f"From {len(b['ideas']['phrases'])} real searches in {market.NAMES[country]} · aim "
+            f"for about {b['words']:,} words",
         ),
         facts("Search snippet", [("Title", b["title"]), ("Description", b["description"])]),
         bullets("Outline", b["outline"]),
@@ -311,7 +361,7 @@ def run_draft(fields: dict, ctx: Context):
     topic = " ".join(str(fields.get("topic", "")).split())
     if not topic:
         raise InputProblem("Enter the topic or main keyword.")
-    b = brief(topic)
+    b = brief(topic, market.code(str(fields.get("country", ""))))
     business = str(fields.get("business", "")).strip()
     prompt = (
         f"Write a helpful web article in plain English about: {topic}.\n"
@@ -363,14 +413,15 @@ def grade(
     h2: int | None = None,
     related: list[str] | None = None,
 ) -> dict:
-    kw = " ".join(keyword.lower().split())
+    kw = flat(keyword)
     if not kw:
         raise InputProblem("Enter the keyword the page should rank for.")
     words = re.findall(r"[A-Za-z0-9؀-ۿ']+", body)
     n = len(words)
     low = " ".join(w.lower() for w in words)
     first100 = " ".join(w.lower() for w in words[:100])
-    count = low.count(kw)
+    padded = f" {low} "
+    count = padded.count(f" {kw} ")
     density = (count * len(kw.split()) / n) if n else 0
     sentences = [s for s in re.split(r"[.!?]+\s", body) if len(s.split()) > 2]
     avg = (sum(len(s.split()) for s in sentences) / len(sentences)) if sentences else 0
@@ -380,7 +431,7 @@ def grade(
             check(
                 "kw-title",
                 "Keyword in the title",
-                PASS if kw in title.lower() else FAIL,
+                PASS if f" {kw} " in f" {flat(title)} " else FAIL,
                 f'"{title}"' if title else "No title.",
                 "Put the keyword near the start of the title.",
                 3,
@@ -390,7 +441,7 @@ def grade(
             check(
                 "kw-h1",
                 "Keyword in the H1",
-                PASS if any(kw in h.lower() for h in h1 or []) else WARN,
+                PASS if any(f" {kw} " in f" {flat(h)} " for h in h1 or []) else WARN,
                 " | ".join(h1 or []) or "No H1.",
                 "Use the keyword in the main heading.",
                 2,
@@ -400,8 +451,8 @@ def grade(
         check(
             "kw-intro",
             "Keyword in the first 100 words",
-            PASS if kw in first100 else WARN,
-            "Found early." if kw in first100 else "Not in the opening.",
+            PASS if f" {kw} " in f" {first100} " else WARN,
+            "Found early." if f" {kw} " in f" {first100} " else "Not in the opening.",
             "Say what the page is about in the first paragraph.",
             2,
         )
@@ -483,8 +534,9 @@ def run_grade(fields: dict, ctx: Context):
     elif not body.strip():
         raise InputProblem("Enter a page address or paste the text to grade.")
     related: list[str] = []
+    country = market.code(str(fields.get("country", "")))
     try:
-        related = [w for w, _ in expand(keyword, budget_s=15.0)["terms"][:12]]
+        related = [w for w, _ in expand(keyword, country, budget_s=15.0)["terms"][:12]]
     except InputProblem:
         related = []
     g = grade(keyword, body, title, h1, h2, related)

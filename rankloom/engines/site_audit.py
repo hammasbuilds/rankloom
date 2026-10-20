@@ -7,12 +7,13 @@ no network, and the live tool runs the same code through `netguard.safe_fetch`.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit
 
 from .. import robots
-from ..netguard import FetchFailed, FetchRefused, Response, safe_fetch
+from ..netguard import FetchFailed, FetchRefused, Response, offered_encoding, safe_fetch
 from .common import (
     FAIL,
     PASS,
@@ -26,9 +27,40 @@ from .common import (
 )
 from .common import checks as checks_block
 from .common import facts as facts_block
+from .common import text as text_block
 
 Fetch = Callable[[str], Response]
 MAX_TEXT = 200_000
+
+# One speed rule for every tool that times a page, and one caveat with it: the time is measured
+# from this server, so it is a reason to run a speed test, not a number to quote.
+SPEED_GOOD_MS = 800
+SPEED_SLOW_MS = 2500
+SPEED_CAVEAT = (
+    "measured from this server - a slow connection here slows it too, so confirm with a speed "
+    "test before quoting it"
+)
+
+
+def speed_status(ms: int) -> str:
+    return PASS if ms < SPEED_GOOD_MS else WARN if ms < SPEED_SLOW_MS else FAIL
+
+
+# A bot check stands in front of the page: Cloudflare's "Just a moment...", a "Human
+# Verification" form, a captcha. Auditing it scored katzsdelicatessen.com 70/100 and advised
+# writing a description for a page no visitor ever sees.
+_CHALLENGE_TITLE = re.compile(
+    r"just a moment|attention required|human verification|verify(?:ing)? (?:that )?you are "
+    r"(?:a )?human|are you a (?:human|robot)|checking your browser|security check|access denied|"
+    r"pardon our interruption|ddos-guard|bot verification|captcha|one more step",
+    re.I,
+)
+_CHALLENGE_BODY = re.compile(
+    r"enable javascript and cookies to continue|javascript is disabled|checking if the site "
+    r"connection is secure|verify you are human|press (?:&|and) hold|incapsula|px-captcha|"
+    r"perimeterx|datadome|sucuri website firewall|captcha",
+    re.I,
+)
 
 
 class _Page(HTMLParser):
@@ -61,8 +93,19 @@ class _Page(HTMLParser):
         elif tag == "link":
             self.links.append(a)
         elif tag == "img":
-            # A bare `alt` is an empty alt (decorative image), not a missing one.
-            self.images.append({"src": a.get("src"), "alt": a["alt"] if "alt" in a else None})
+            # A bare `alt` is an empty alt (decorative image), not a missing one. An image inside
+            # <noscript>, or one a pixel across, is a tracking pixel, not content.
+            tiny = a.get("width", "").strip() in ("0", "1") or a.get("height", "").strip() in (
+                "0",
+                "1",
+            )
+            self.images.append(
+                {
+                    "src": a.get("src") or a.get("data-src"),
+                    "alt": a["alt"] if "alt" in a else None,
+                    "pixel": tiny or "noscript" in self._stack,
+                }
+            )
         elif tag == "a" and a.get("href"):
             self.anchors.append(a["href"])
         elif tag == "iframe" and a.get("src"):
@@ -173,16 +216,40 @@ def _jsonld_types(blocks: list[str]) -> tuple[list[str], int]:
     return sorted(set(types)), broken
 
 
+def challenge(resp: Response, page: _Page | None) -> str:
+    """Why this response is a bot check and not the page, or "" when it is the page."""
+    if resp.headers.get("cf-mitigated", "").lower() == "challenge":
+        return "Cloudflare answered with a challenge"
+    title = (page.title if page else "") or ""
+    if title and _CHALLENGE_TITLE.search(title) and (page is None or page.words < 400):
+        return f'the page is a bot check titled "{title}"'
+    # Body words alone also appear on real pages ("protected by reCAPTCHA"), so they count only
+    # on an error answer or a page with almost no text.
+    small = page is None or page.words < 150
+    if (resp.status in (401, 403, 405, 429, 503) or small) and _CHALLENGE_BODY.search(
+        resp.text()[:200_000]
+    ):
+        return f"the server answered {resp.status} with a bot check"
+    return ""
+
+
 def _robots_blocks_all(text: str) -> bool:
     return robots.blocked(text, "*")
 
 
-def audit(url: str, fetch: Fetch = safe_fetch) -> dict:
+def audit(url: str, fetch: Fetch = safe_fetch, probe: Callable[[str], str] | None = None) -> dict:
     url = normalise_url(url)
     resp = fetch(url)
+    if probe is None and fetch is safe_fetch:
+        probe = offered_encoding
     checks: list[dict] = []
     final = resp.url
     scheme = urlsplit(final).scheme
+    is_html = "html" in resp.headers.get("content-type", "").lower()
+    page = parse_page(resp.text()) if is_html else None
+    blocked = challenge(resp, page)
+    if blocked:
+        return blocked_result(url, resp, blocked)
 
     checks.append(
         _check(
@@ -220,10 +287,10 @@ def audit(url: str, fetch: Fetch = safe_fetch) -> dict:
         _check(
             "speed",
             "Fast server response",
-            PASS if ms < 800 else WARN if ms < 2500 else FAIL,
-            f"Took {ms} ms, measured from this server - a slow connection here slows it too, "
-            "so confirm with a speed test before quoting it.",
-            "Cache the page, use a CDN, or move to faster hosting; aim for under 800 ms.",
+            speed_status(ms),
+            f"Took {ms} ms, {SPEED_CAVEAT}.",
+            "Confirm the time with a speed test first; if it holds, cache the page, use a CDN, "
+            f"or move to faster hosting - aim for under {SPEED_GOOD_MS} ms.",
             2,
         )
     )
@@ -238,19 +305,32 @@ def audit(url: str, fetch: Fetch = safe_fetch) -> dict:
             "Move inline scripts, styles and data out of the HTML document.",
         )
     )
-    enc = resp.headers.get("content-encoding", "")
+    enc = resp.headers.get("content-encoding", "").lower()
+    how = f"Content-Encoding: {enc}." if enc else ""
+    if not enc and probe is not None:
+        try:
+            offered = probe(final)
+        except (FetchFailed, FetchRefused):
+            offered = ""
+        if offered:
+            enc = offered
+            how = f"Content-Encoding: {offered} (served when a browser accepts it)."
     checks.append(
         _check(
             "compression",
             "Compressed transfer",
             PASS if enc in ("gzip", "br", "deflate", "zstd") else WARN,
-            f"Content-Encoding: {enc or 'none'}.",
+            how
+            or (
+                "No compression for gzip or deflate"
+                + ("; Brotli was asked for too." if probe is not None else " (Brotli not checked).")
+            ),
             "Turn on gzip or Brotli compression on the web server.",
         )
     )
 
     ctype = resp.headers.get("content-type", "")
-    if "html" not in ctype.lower():
+    if page is None:
         checks.append(
             _check(
                 "html",
@@ -262,8 +342,6 @@ def audit(url: str, fetch: Fetch = safe_fetch) -> dict:
             )
         )
         return _finish(url, resp, checks, None)
-
-    page = parse_page(resp.text())
 
     title = page.title or ""
     checks.append(
@@ -379,13 +457,19 @@ def audit(url: str, fetch: Fetch = safe_fetch) -> dict:
             'Add lang="en" (or ur, ar ...) to the <html> element.',
         )
     )
-    missing_alt = [i for i in page.images if i["alt"] is None]
+    images = [i for i in page.images if not i["pixel"]]
+    missing_alt = [i for i in images if i["alt"] is None]
+    named = ", ".join(
+        str(i["src"] or "(no src)").split("?")[0].rsplit("/", 1)[-1][:60] for i in missing_alt[:5]
+    )
     checks.append(
         _check(
             "alt",
             "Images have alt text",
             PASS if not missing_alt else WARN if len(missing_alt) <= 2 else FAIL,
-            f"{len(missing_alt)} of {len(page.images)} images have no alt attribute.",
+            f"{len(missing_alt)} of {len(images)} images have no alt attribute"
+            + ((": " + named + (" ..." if len(missing_alt) > 5 else "")) if missing_alt else "")
+            + ".",
             'Describe each image in an alt attribute; use alt="" for purely decorative ones.',
         )
     )
@@ -470,7 +554,7 @@ def audit(url: str, fetch: Fetch = safe_fetch) -> dict:
         "description": desc,
         "h1": h1s[:3],
         "words": page.words,
-        "images": len(page.images),
+        "images": len(images),
         "links_internal": internal,
         "links_external": len(page.anchors) - internal,
         "schema_types": types,
@@ -492,7 +576,38 @@ def _finish(url: str, resp: Response, checks: list[dict], facts: dict | None) ->
     }
 
 
+def blocked_result(url: str, resp: Response, reason: str) -> dict:
+    """No score: nothing read from a bot check is true of the page visitors see."""
+    return {
+        "url": url,
+        "final_url": resp.url,
+        "status": resp.status,
+        "elapsed_ms": resp.elapsed_ms,
+        "blocked": reason,
+        "score": None,
+        "counts": {PASS: 0, WARN: 0, FAIL: 0},
+        "checks": [],
+        "facts": None,
+    }
+
+
+BLOCKED_ADVICE = (
+    "Nothing here describes the real page, so there is no score and no advice. Open the site in a "
+    "browser to check it by hand, or ask the owner to let RankloomBot through their bot "
+    "protection, and run the check again."
+)
+
+
+def blocked_view(result: dict, what: str = "page") -> dict:
+    return view(
+        headline(result["final_url"], f"Could not read the real {what}: {result['blocked']}"),
+        text_block("Bot protection stopped the check", BLOCKED_ADVICE),
+    )
+
+
 def audit_view(result: dict) -> dict:
+    if result.get("blocked"):
+        return blocked_view(result)
     f = result["facts"]
     fact_block = (
         facts_block(
@@ -524,6 +639,12 @@ def audit_view(result: dict) -> dict:
 def run(fields: dict, ctx: Context | None = None) -> tuple[str, int | None, dict]:
     fetch = ctx.fetch if ctx else None
     result = audit(str(fields.get("url", "")), **({"fetch": fetch} if fetch else {}))
+    if result.get("blocked"):
+        return (
+            f"{result['final_url']}: could not read the real page ({result['blocked']})",
+            None,
+            {**result, "view": audit_view(result)},
+        )
     c = result["counts"]
     summary = (
         f"{result['final_url']} scored {result['score']}/100 - {c['fail']} fail, {c['warn']} warn"

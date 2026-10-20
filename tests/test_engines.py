@@ -4,7 +4,16 @@ import pytest
 from test_site_audit import GOOD
 
 from rankloom import ai, robots, sources
-from rankloom.engines import ai_visibility, content, crawl, local_seo
+from rankloom.engines import (
+    ai_visibility,
+    content,
+    crawl,
+    leads,
+    local_seo,
+    reports,
+    search_perf,
+    site_audit,
+)
 from rankloom.engines.common import Context, InputProblem
 from rankloom.netguard import Response
 
@@ -252,7 +261,7 @@ def test_question_builder_mixes_templates_and_real_phrasings(fake_suggest):
 def test_a_brief_turns_real_questions_into_headings(fake_suggest):
     b = content.brief("rooftop solar")
     assert any(h.startswith("H2: How much") for h in b["outline"])
-    assert b["outline"][0].startswith("H1: Rooftop solar")
+    assert b["outline"][0].startswith("H1: Rooftop Solar")
     assert "price" not in b["terms"]  # added by the lookups, not chosen by searchers
 
 
@@ -384,7 +393,9 @@ def test_a_no_website_draft_never_mentions_their_website():
     from rankloom.engines import leads
 
     email = leads.write_drafts("Sunrise Dental", "", [], "Ayesha", "")[0]["text"]
-    assert "on your website" not in email and "cannot find you" in email
+    assert "on your website" not in email and "could not find a website listed" in email
+    # The lead came from a map, so "nothing on Maps" would be false.
+    assert "Maps" not in email
 
 
 def test_opportunities_keep_a_small_sites_near_page_one_queries():
@@ -419,7 +430,8 @@ def test_a_site_that_did_not_answer_is_never_quoted_to_the_business():
     email = leads.write_drafts("Pro Hygenist", "https://slow.example/", qa["problems"], "", "")[0]
     text = email["text"]
     assert "does not load" not in text and "did not answer" not in text
-    assert "quick wins" in text
+    # Nothing was found, so nothing is promised.
+    assert "quick wins" not in text and "fixable" not in text and "What I found" not in text
     one = leads.write_drafts("A", "https://a.example/", ["the home page has no title"], "", "")
     assert "1 thing I noticed" in one[0]["text"]
 
@@ -506,3 +518,404 @@ def test_comparison_heading_drops_phrases_that_restate_the_topic(monkeypatch):
     b = content.brief("solar panel price in lahore")
     heading = next((h for h in b["outline"] if "Comparing" in h), "")
     assert "hall road" not in heading.lower() and "today" not in heading.lower()
+
+
+# --- a senior SEO's review: the client's market, and claims that were not true ----------------
+
+
+def market_suggest(monkeypatch, phrases):
+    asked = []
+
+    def suggest(q, country="pk", language="en"):
+        asked.append(country)
+        return "google", phrases
+
+    monkeypatch.setattr(sources, "suggest", suggest)
+    return asked
+
+
+def test_question_builder_keeps_to_the_clients_market(monkeypatch):
+    asked = market_suggest(
+        monkeypatch,
+        [
+            "how much dentist earn in pakistan",
+            "dentist lahore",
+            "dentist johar town",
+            "emergency dentist nyc",
+            "dentist jobs williamsville",
+            "best dentist williamsville ny",
+            "dentist near me open saturday",
+        ],
+    )
+    _, _, r = ai_visibility.run_questions(
+        {"niche": "dentist", "city": "Williamsville, NY", "country": "us"}, Context(1)
+    )
+    assert set(asked) == {"us"}
+    assert r["searched"] == ["best dentist williamsville ny", "dentist near me open saturday"]
+    assert r["dropped"] == 5
+    assert "United States" in r["view"]["headline"]["subtitle"]
+
+
+def test_the_country_is_a_visible_choice_on_every_autocomplete_tool():
+    from rankloom.tools import TOOLS
+
+    subs = {f"{t['slug']}/{s['slug']}": s for t in TOOLS for s in t["subtools"]}
+    for key in (
+        "ai-visibility/questions",
+        "content-studio/keywords",
+        "content-studio/brief",
+        "content-studio/draft",
+        "content-studio/grade",
+        "site-audit/local",
+    ):
+        field = next(f for f in subs[key]["fields"] if f["name"] == "country")
+        assert field["type"] == "select" and len(field["options"]) > 10, key
+        assert any(o["value"] == "us" for o in field["options"])
+
+
+def test_keyword_ideas_leave_out_other_markets_and_file_place_searches_as_local(monkeypatch):
+    market_suggest(
+        monkeypatch,
+        [
+            "emergency dentist prices nhs",
+            "emergency dentist open bank holidays",
+            "emergency dentist costa adeje",
+            "emergency dentist nyc",
+            "emergency dentist open sunday",
+            "emergency dentist cost without insurance",
+        ],
+    )
+    r = content.expand("emergency dentist", "us")
+    assert r["phrases"] == [
+        "emergency dentist nyc",
+        "emergency dentist open sunday",
+        "emergency dentist cost without insurance",
+    ]
+    assert r["other_market"] == 3
+    assert "emergency dentist nyc" in r["groups"]["Local"]
+    words = [w for w, _ in r["terms"]]
+    assert "nhs" not in words and "bank" not in words and "holidays" not in words
+
+
+def test_grader_reads_the_keyword_as_words_not_punctuation():
+    title = "Emergency Dentist Williamsville, NY | (716) 689-8882 | Amherst Dental"
+    body = "Emergency dentist Williamsville, NY: we see you today. " + "Care. " * 300
+    g = content.grade(
+        "emergency dentist williamsville ny", body, title, ["Emergency Dentist Williamsville, NY"]
+    )
+    ids = {c["id"]: c["status"] for c in g["checks"]}
+    assert ids["kw-title"] == "pass" and ids["kw-h1"] == "pass" and ids["kw-intro"] == "pass"
+    g = content.grade("emergency dentist", "Our dentistry team. " * 50, "Dentistry", [])
+    assert {c["id"]: c["status"] for c in g["checks"]}["kw-title"] == "fail"
+
+
+def test_a_brief_title_cases_its_topic(fake_suggest):
+    assert content.title_case("emergency dentist williamsville ny") == (
+        "Emergency Dentist Williamsville NY"
+    )
+    assert content.title_case("price of solar in lahore") == "Price of Solar in Lahore"
+    b = content.brief("emergency dentist williamsville ny", "us")
+    assert b["title"].startswith("Emergency Dentist Williamsville NY - ")
+
+
+def test_the_grader_and_brief_read_the_chosen_market(monkeypatch):
+    asked = market_suggest(monkeypatch, ["solar price"])
+    content.run_grade({"keyword": "solar", "text": "solar " * 50, "country": "gb"}, Context(1))
+    content.run_brief({"topic": "solar", "country": "gb"}, Context(1))
+    assert set(asked) == {"gb"}
+
+
+KATZ = (
+    "<html><head><title>Human Verification</title></head><body><h1>JavaScript is disabled</h1>"
+    "<p>In order to continue, we need to verify that you're not a robot.</p></body></html>"
+)
+CLOUDFLARE = (
+    "<html><head><title>Just a moment...</title></head><body>"
+    "<p>Enable JavaScript and cookies to continue</p></body></html>"
+)
+
+
+def test_a_bot_check_page_is_reported_as_unreadable_not_scored():
+    for status, page in ((405, KATZ), (403, CLOUDFLARE)):
+        fetch = site({"/": (status, page)})
+        summary, score, out = site_audit.run({"url": "katz.example"}, Context(1, None, fetch))
+        assert score is None and out["blocked"] and out["checks"] == []
+        assert "could not read the real page" in summary
+        assert "no score and no advice" in out["view"]["blocks"][0]["text"]
+        _, score, out = local_seo.run({"url": "katz.example"}, Context(1, None, fetch))
+        assert score is None and out["blocked"]
+        _, score, out = crawl.run({"url": "katz.example"}, Context(1, None, fetch))
+        assert score is None and out["blocked"]
+
+
+def test_a_real_page_that_mentions_a_captcha_is_still_audited():
+    page = GOOD.replace("</body>", "<p>This form is protected by reCAPTCHA.</p></body>")
+    r = site_audit.audit("solar.example", site({"/": (200, page)}))
+    assert not r.get("blocked") and r["score"] > 50
+
+
+def test_a_bot_check_is_never_quoted_to_a_lead():
+    qa = leads.quick_audit("https://bupa.example/", site({"/": (403, CLOUDFLARE)}))
+    assert qa["reachable"] is False and qa["problems"] == [leads.BLOCKED]
+    assert leads.opportunity({"website": "bupa.example", "audit": qa}) == 45
+    email = leads.write_drafts("Bupa", "bupa.example", qa["problems"], "", "")[0]["text"]
+    assert "bot" not in email and "does not load" not in email
+
+
+def test_brotli_counts_as_compression_when_the_server_offers_it():
+    fetch = site({"/": (200, GOOD)})
+    r = site_audit.audit("solar.example", fetch, probe=lambda url: "br")
+    c = {x["id"]: x for x in r["checks"]}["compression"]
+    assert c["status"] == "pass" and "br" in c["detail"]
+    r = site_audit.audit("solar.example", fetch, probe=lambda url: "")
+    c = {x["id"]: x for x in r["checks"]}["compression"]
+    assert c["status"] == "warn" and "Brotli was asked for too" in c["detail"]
+
+
+def test_the_brotli_probe_keeps_the_same_address_rules():
+    from rankloom import netguard
+
+    with pytest.raises(netguard.FetchRefused):
+        netguard.offered_encoding("http://localhost/")
+    with pytest.raises(netguard.FetchRefused):
+        netguard.offered_encoding("https://example.com:8443/")
+
+
+def test_alt_text_names_the_images_and_skips_tracking_pixels():
+    body = (
+        '<img src="/img/hero.jpg?v=2&amp;w=800"><img src="/icons/phone-icon.png">'
+        '<img src="https://pixel.example/tr?id=1" width="1" height="1">'
+        '<noscript><img src="https://www.facebook.com/tr?id=2"></noscript>'
+        '<img src="/a.jpg" alt="Our office">'
+    )
+    r = site_audit.audit("x.example", site({"/": (200, html("Page title here", body))}))
+    alt = {c["id"]: c for c in r["checks"]}["alt"]
+    assert alt["status"] == "warn"
+    assert alt["detail"] == "2 of 3 images have no alt attribute: hero.jpg, phone-icon.png."
+
+
+def test_a_plain_facebook_page_is_not_a_review_link():
+    base = LOCAL.replace('<a href="https://g.page/smilecare/review">Review us</a>', "")
+    base = base.replace('"aggregateRating":{"ratingValue":4.8,"reviewCount":120},', "")
+    page = base.replace("</body>", '<a href="https://www.facebook.com/smilecare/">FB</a></body>')
+    r = local_seo.audit("smile.example", "Lahore", site({"/": (200, page)}))
+    assert {c["id"]: c["status"] for c in r["checks"]}["reviews"] == "warn"
+    page = base.replace(
+        "</body>", '<a href="https://www.facebook.com/smilecare/reviews">FB</a></body>'
+    )
+    r = local_seo.audit("smile.example", "Lahore", site({"/": (200, page)}))
+    assert {c["id"]: c["status"] for c in r["checks"]}["reviews"] == "pass"
+
+
+US_DENTIST = html(
+    "Amherst Dental Group Williamsville",
+    "<h1>Dentist in Williamsville</h1><p>Call (716) 689-8882</p><p>777 Hopkins Rd</p>",
+    '<script type="application/ld+json">{"@type":"Dentist","name":"Amherst Dental Group",'
+    '"telephone":"716-689-8882","address":{"@type":"PostalAddress",'
+    '"streetAddress":"777 Hopkins Rd","addressLocality":"Williamsville","addressRegion":"NY"}}'
+    "</script>",
+)
+
+
+def test_phone_numbers_are_read_whole_and_never_across_lines():
+    r = local_seo.audit("amherst.example", "Williamsville", site({"/": (200, US_DENTIST)}))
+    assert r["business"]["phone"] == ["(716) 689-8882"]
+    assert local_seo.PHONE.findall("Open 24/7 512-400-0749 today") == ["512-400-0749"]
+    assert {c["id"]: c["status"] for c in r["checks"]}["nap-match"] == "pass"
+
+
+def test_whatsapp_advice_only_where_customers_message_first():
+    r = local_seo.audit("amherst.example", "Williamsville", site({"/": (200, US_DENTIST)}))
+    assert r["market"] == "us" and "whatsapp" not in {c["id"] for c in r["checks"]}
+    no_wa = LOCAL.replace('<a href="https://wa.me/923001234567">WhatsApp</a>', "")
+    r = local_seo.audit("smile.example", "Lahore", site({"/": (200, no_wa)}))
+    assert r["market"] == "pk"
+    wa = {c["id"]: c for c in r["checks"]}["whatsapp"]
+    assert wa["status"] == "warn" and "Pakistan" in wa["fix"]
+    r = local_seo.audit("plain.example", "", site({"/": (200, html("A shop", "<p>Hi</p>"))}))
+    assert r["market"] == "" and "whatsapp" not in {c["id"] for c in r["checks"]}
+    r = local_seo.audit("plain.example", "", site({"/": (200, html("A shop", "<p>Hi</p>"))}), "ae")
+    assert "whatsapp" in {c["id"] for c in r["checks"]}
+
+
+def test_a_crawl_never_passes_a_problem_it_found_and_names_the_pages():
+    words = "word " * 400
+    links = "".join(f"<a href=/p{i}>p</a>" for i in range(24))
+    pages = {"/": (200, html("Home of the clinic", f"<h1>Home</h1>{links}<p>{words}</p>"))}
+    for i in range(24):
+        pages[f"/p{i}"] = (200, html(f"Page {i} title", f"<h1>P{i}</h1><p>{words}</p>"))
+    pages["/p7"] = (
+        200,
+        "<html><head><title>Dentist Williamsville NY | Emergency Dentist Williamsville | "
+        "Cosmetic Dentist Williamsville | Implants</title><meta name=description content=''>"
+        f"</head><body><h1>P7</h1><p>{words}</p></body></html>",
+    )
+    r = crawl.crawl("https://clinic.example/", site(pages), max_pages=25)
+    checks = {c["id"]: c for c in crawl.analyse(r)}
+    assert checks["no-desc"]["status"] == "warn" and "/p7" in checks["no-desc"]["detail"]
+    assert checks["long-title"]["status"] == "warn"
+    assert (
+        "1 of 25 pages" in checks["long-title"]["detail"]
+        and "longest" in checks["long-title"]["detail"]
+    )
+
+
+def test_crawl_and_page_audit_judge_speed_by_the_same_rule():
+    one = {"/": (200, GOOD)}
+    audit = site_audit.audit("solar.example", site(one, ms=2544))
+    assert {c["id"]: c["status"] for c in audit["checks"]}["speed"] == "fail"
+    r = crawl.crawl("https://solar.example/", site(one, ms=2544), max_pages=5)
+    slow = {c["id"]: c for c in crawl.analyse(r)}["slow"]
+    assert slow["status"] == "fail" and "measured from this server" in slow["detail"]
+    r = crawl.crawl("https://solar.example/", site(one, ms=1200), max_pages=5)
+    assert {c["id"]: c["status"] for c in crawl.analyse(r)}["slow"] == "warn"
+
+
+GSC_PAGES = "Top pages,Clicks,Impressions,CTR,Position\nhttps://a.example/,100,1000,10%,3\n"
+GSC_QUERIES = (
+    "Top queries,Clicks,Impressions,CTR,Position\nbrand,60,500,12%,1\nservice,20,400,5%,7\n"
+)
+GSC_FILTERS = "Filter,Value\nSearch type,Web\nDate,Last 28 days\n"
+
+
+def gsc_upload(*named):
+    import base64
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for name, text in named:
+            z.writestr(name, "﻿" + text)
+    return [{"name": "export.zip", "data": base64.b64encode(buf.getvalue()).decode()}]
+
+
+def test_search_console_totals_come_from_one_table_and_carry_the_period(tmp_path):
+    from rankloom.db import Database
+
+    db = Database(tmp_path / "t.db")
+    db.run(
+        "INSERT INTO users (id, email, name, pw_hash, created_at) VALUES (1, 'a@b.c', 'A', 'x', 0)"
+    )
+    upload = gsc_upload(
+        ("Queries.csv", GSC_QUERIES), ("Pages.csv", GSC_PAGES), ("Filters.csv", GSC_FILTERS)
+    )
+    _, _, r = search_perf.run_import({"site": "a.example", "files": upload}, Context(1, db))
+    assert r["totals"]["clicks"] == 100 and r["totals_from"] == "Pages table"
+    assert r["period"] == "Last 28 days"
+    view_facts = dict(r["view"]["blocks"][0]["items"])
+    assert view_facts["Period"] == "Last 28 days"
+
+
+def test_a_query_new_this_period_reads_new_not_zero():
+    assert search_perf.position_move({"position": 12.7, "impressions": 30}) == "new at 12.7"
+    row = {"position": 4.2, "impressions": 9, "prev_position": 2.8, "prev_impressions": 9}
+    assert search_perf.position_move(row) == "2.8 → 4.2"
+    gone = {"position": 0, "impressions": 0, "prev_position": 9.1, "prev_impressions": 40}
+    assert search_perf.position_move(gone) == "gone (was 9.1)"
+
+
+def test_the_work_log_reads_as_work_and_counts_repeats():
+    runs = [
+        {
+            "tool": "search-performance",
+            "subtool": "import",
+            "created_at": 1_760_900_000,
+            "input": {"site": "amherstdental.com"},
+        },
+        {
+            "tool": "search-performance",
+            "subtool": "import",
+            "created_at": 1_760_800_000,
+            "input": {"site": "amherstdental.com"},
+        },
+        {
+            "tool": "ai-visibility",
+            "subtool": "questions",
+            "created_at": 1_760_700_000,
+            "input": {"niche": "dentist"},
+        },
+        {
+            "tool": "lead-finder",
+            "subtool": "outreach",
+            "created_at": 1_760_600_000,
+            "input": {"site": "amherstdental.com"},
+        },
+    ]
+    log = reports.work_log(runs)
+    assert len(log) == 2
+    assert log[0].startswith("Imported Google Search Console data of amherstdental.com (")
+    assert log[0].endswith(", 2 times)")
+    assert log[1].startswith("Researched the questions customers ask AI assistants: “dentist”")
+
+
+def test_branches_of_a_chain_are_not_told_they_have_no_website():
+    from rankloom.engines import leads
+    from rankloom.engines.common import Context
+
+    found = [
+        {"name": "Gourmet", "website": "https://gourmetpakistan.com", "phone": "", "email": "",
+         "address": "Gulberg", "city": "Lahore", "category": "bakery", "source": "osm"},
+        {"name": "Gourmet", "website": "", "phone": "", "email": "", "address": "Johar Town",
+         "city": "Lahore", "category": "bakery", "source": "osm"},
+        {"name": "mydentist", "website": "", "brand": "mydentist",
+         "brand_website": "https://www.mydentist.co.uk", "phone": "", "email": "",
+         "address": "Chorlton", "city": "Manchester", "category": "dentist", "source": "osm"},
+        {"name": "Corner Bakery", "website": "", "phone": "", "email": "", "address": "Model Town",
+         "city": "Lahore", "category": "bakery", "source": "osm"},
+    ]
+    ctx = Context(user_id=0, fetch=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no fetch")))
+    r = leads.search("bakery", "Lahore", ctx, find=lambda *a, **k: [dict(b) for b in found],
+                     audit_limit=0)
+    by = {(b["name"], b["address"]): b for b in r["leads"]}
+    branch = next(b for b in r["leads"] if b["name"] == "Gourmet" and not b["website"])
+    assert "gourmetpakistan.com" in branch["problems"][0] and branch["opportunity"] < 50
+    chain = next(b for b in r["leads"] if b["name"] == "mydentist")
+    assert "mydentist.co.uk" in chain["problems"][0]
+    alone = next(b for b in r["leads"] if b["name"] == "Corner Bakery")
+    assert alone["opportunity"] == 50 and "not listed" in alone["problems"][0]
+    assert len(by) == 4
+
+
+def test_same_name_branches_without_a_website_stay_separate_leads(tmp_path):
+    from rankloom.db import Database
+    from rankloom.engines import leads
+
+    db = Database(tmp_path / "r.db")
+    db.run("INSERT INTO users (email, name, pw_hash, created_at) VALUES ('a@b.co','A','x',0)")
+    uid = db.one("SELECT id FROM users")["id"]
+    for addr in ("Gulberg", "Johar Town", "DHA"):
+        leads.save_lead(db, uid, {"name": "Gourmet", "website": "", "address": addr})
+    leads.save_lead(db, uid, {"name": "Chain", "website": "chain.example", "address": "One"})
+    leads.save_lead(db, uid, {"name": "Chain", "website": "chain.example", "address": "Two"})
+    assert db.one("SELECT COUNT(*) FROM leads WHERE name = 'Gourmet'")[0] == 3
+    assert db.one("SELECT COUNT(*) FROM leads WHERE name = 'Chain'")[0] == 1  # one site to fix
+
+
+def test_the_whatsapp_greeting_fits_the_country():
+    from rankloom.engines import leads
+
+    uk = leads.write_drafts("Avalon", "", [], "", "", "Chorlton, Manchester, England, UK")[2]
+    pk = leads.write_drafts("Gourmet", "", [], "", "", "Gulberg, Lahore, Punjab, Pakistan")[2]
+    assert not uk["text"].startswith("Assalam") and pk["text"].startswith("Assalam o Alaikum")
+
+
+def test_no_padlock_is_only_said_when_the_secure_site_does_not_work():
+    from rankloom.engines import leads
+    from rankloom.netguard import FetchFailed
+
+    page = (b"<html><head><title>Brooklyn Court Dental</title></head>"
+            b"<body><h1>Dentist</h1></body></html>")
+
+    def fetcher(secure_ok):
+        def fetch(url):
+            if url.startswith("https://") and not secure_ok:
+                raise FetchFailed("no TLS")
+            return Response(url=url, status=200, headers={"content-type": "text/html"},
+                            body=page, elapsed_ms=100)
+        return fetch
+
+    works = leads.quick_audit("http://brooklyn.example/", fetcher(True))["problems"]
+    assert leads.HTTPS_NO_REDIRECT in works and leads.PLAIN["https"] not in works
+    broken = leads.quick_audit("http://brooklyn.example/", fetcher(False))["problems"]
+    assert leads.PLAIN["https"] in broken

@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 
 from .. import ai, robots, sources
 from ..netguard import FetchFailed, FetchRefused
+from . import market
 from .common import (
     FAIL,
     PASS,
@@ -317,9 +318,17 @@ def template_questions(niche: str, city: str, brand: str = "") -> list[str]:
     return qs
 
 
+# Searches about working in the trade, not buying from it: "how much dentist earn", "dentist jobs".
+_NOT_A_CUSTOMER = re.compile(
+    r"\b(?:salary|salaries|earn|earns|earning|earnings|jobs?|career|careers|vacanc(?:y|ies)|"
+    r"hiring|courses?|degree|internships?)\b"
+)
+
+
 def build_questions(niche: str, city: str, brand: str, country: str = "pk") -> dict:
     if not niche:
         raise InputProblem("Enter the service or product, e.g. dentist.")
+    country = market.code(country)
     seeds = [
         f"best {niche} in {city}" if city else f"best {niche}",
         f"{niche} {city}".strip(),
@@ -341,12 +350,19 @@ def build_questions(niche: str, city: str, brand: str, country: str = "pk") -> d
                 answered += 1
                 provider = provider or res[0]
                 phrasings.extend(res[1])
-    seen, real = set(), []
+    seen, real, dropped = set(), [], 0
     for p in phrasings:
         key = p.lower().strip()
-        if key not in seen and niche.split()[0].lower() in key:
-            seen.add(key)
-            real.append(p)
+        if key in seen or niche.split()[0].lower() not in key:
+            continue
+        seen.add(key)
+        # A customer in Williamsville is not asking about Lahore, or about a dentist's pay.
+        if market.foreign(key, country, city) or (
+            _NOT_A_CUSTOMER.search(key) and not _NOT_A_CUSTOMER.search(niche.lower())
+        ):
+            dropped += 1
+            continue
+        real.append(p)
     as_questions = []
     for p in real:
         q = p.strip()
@@ -370,6 +386,8 @@ def build_questions(niche: str, city: str, brand: str, country: str = "pk") -> d
         "provider": provider,
         "answered": answered,
         "asked": len(seeds),
+        "country": country,
+        "dropped": dropped,
     }
 
 
@@ -378,13 +396,20 @@ def run_questions(fields: dict, ctx: Context):
         str(fields.get("niche", "")).strip(),
         str(fields.get("city", "")).strip(),
         str(fields.get("brand", "")).strip(),
+        market.code(str(fields.get("country", ""))),
     )
     r["view"] = view(
         headline(
             f"Questions for {r['niche']}" + (f" in {r['city']}" if r["city"] else ""),
             f"{len(r['templates'])} standard questions, {len(r['searched'])} real search "
-            f"phrasings ({r['answered']} of {r['asked']} searches answered"
+            f"phrasings in {market.NAMES[r['country']]} ({r['answered']} of {r['asked']} "
+            "searches answered"
             + (f", from {r['provider']}" if r["provider"] else "")
+            + (
+                f"; {r['dropped']} about other places or about working in the trade left out"
+                if r["dropped"]
+                else ""
+            )
             + ")",
         ),
         bullets(

@@ -171,9 +171,9 @@ def test_run_returns_a_summary_and_score():
     pages = {"https://solar.example/": (200, GOOD, {}, "https://solar.example/", [])}
     original = site_audit.safe_fetch
     try:
-        site_audit.audit.__defaults__ = (fetcher(pages),)
+        site_audit.audit.__defaults__ = (fetcher(pages), None)
         summary, score, out = site_audit.run({"url": "solar.example"})
     finally:
-        site_audit.audit.__defaults__ = (original,)
+        site_audit.audit.__defaults__ = (original, None)
     assert summary.startswith("https://solar.example/ scored")
     assert score == out["score"]

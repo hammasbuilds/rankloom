@@ -94,6 +94,18 @@ def parse_csv(text: str) -> dict | None:
     return {"kind": kind, "rows": rows, "compare": compare, "labels": labels}
 
 
+def parse_period(text: str) -> str:
+    """The date range from Filters.csv ("Last 28 days", "Compare last 28 days to previous
+    period"), or "" when the file is not the filters table."""
+    rows = list(csv.reader(io.StringIO(text.lstrip("\ufeff"))))
+    if not rows or [c.strip().lower() for c in rows[0][:2]] != ["filter", "value"]:
+        return ""
+    for r in rows[1:]:
+        if len(r) >= 2 and r[0].strip().lower() == "date":
+            return r[1].strip()
+    return ""
+
+
 def parse_upload(files: list[dict]) -> dict:
     """`files` is [{name, data(base64)}]. Returns {"queries": [...], "pages": [...], ...}."""
     tables: dict[str, dict] = {}
@@ -113,7 +125,9 @@ def parse_upload(files: list[dict]) -> dict:
                 raise InputProblem("That zip file is damaged.") from exc
         else:
             texts.append(raw.decode("utf-8", errors="replace"))
+    period = ""
     for t in texts:
+        period = period or parse_period(t)
         parsed = parse_csv(t)
         if parsed and parsed["kind"] not in tables:
             tables[parsed["kind"]] = parsed
@@ -129,7 +143,21 @@ def parse_upload(files: list[dict]) -> dict:
         "pages": tables.get("pages", {}).get("rows", []),
         "compare": compare,
         "labels": labels,
+        "period": period,
     }
+
+
+def site_rows(data: dict) -> tuple[list[dict], str]:
+    """The rows every total is taken from, and their name. The Pages table first: Search Console
+    leaves rare queries out of the Queries table, so its totals run low, and taking the import's
+    totals from queries but the report's from pages showed one site two click counts."""
+    if data.get("pages"):
+        return data["pages"], "Pages table"
+    return data.get("queries", []), "Queries table"
+
+
+def period_text(data: dict) -> str:
+    return data.get("period") or (" vs ".join(data["labels"]) if data.get("labels") else "")
 
 
 def totals(rows: list[dict], prefix: str = "") -> dict:
@@ -191,7 +219,8 @@ def run_import(fields: dict, ctx: Context):
     )
     did = cur.lastrowid
     q, p = data["queries"], data["pages"]
-    t = totals(q or p)
+    rows_for_totals, source = site_rows(data)
+    t = totals(rows_for_totals)
     top_q = sorted(q, key=lambda r: -r["clicks"])[:15]
     top_p = sorted(p, key=lambda r: -r["clicks"])[:15]
     r = {
@@ -200,18 +229,22 @@ def run_import(fields: dict, ctx: Context):
         "queries": len(q),
         "pages": len(p),
         "totals": t,
+        "totals_from": source,
+        "period": data["period"],
         "compare": data["compare"],
     }
     r["view"] = view(
         headline(
             f"Imported {site}",
             f"{len(q)} queries and {len(p)} pages"
-            + (" with a comparison period" if data["compare"] else ""),
+            + (" with a comparison period" if data["compare"] else "")
+            + (f" · {data['period']}" if data["period"] else ""),
             None,
         ),
         facts(
-            "Totals",
+            f"Totals (from the {source})",
             [
+                ("Period", period_text(data) or "not stated in the export"),
                 ("Clicks", f"{t['clicks']:,}"),
                 ("Impressions", f"{t['impressions']:,}"),
                 ("Click-through rate", pct(t["ctr"])),
@@ -359,9 +392,20 @@ def changes(data: dict) -> dict:
     return out
 
 
+def position_move(r: dict) -> str:
+    """Where a row ranked before and now. No impressions before means it was not ranking then:
+    "new at 12.7", not "0.0 → 12.7"."""
+    if not r.get("prev_impressions") and not r.get("prev_position"):
+        return f"new at {r.get('position', 0):.1f}"
+    if not r.get("impressions") and not r.get("position"):
+        return f"gone (was {r.get('prev_position', 0):.1f})"
+    return f"{r.get('prev_position', 0):.1f} → {r.get('position', 0):.1f}"
+
+
 def run_changes(fields: dict, ctx: Context):
     data = load_dataset(ctx, fields.get("dataset"))
     c = changes(data)
+    _, source = site_rows(data)
     base = c["pages"] if data["pages"] else c["queries"]
     now_t, before = base["now"], base["before"]
     diff = now_t["clicks"] - before["clicks"]
@@ -374,7 +418,7 @@ def run_changes(fields: dict, ctx: Context):
                 int(r.get("prev_clicks", 0)),
                 int(r["clicks"]),
                 {"status": FAIL if r["delta"] < 0 else PASS, "text": f"{int(r['delta']):+d}"},
-                f"{r.get('prev_position', 0):.1f} → {r.get('position', 0):.1f}",
+                position_move(r),
             ]
             for r in items
         ]
@@ -383,7 +427,7 @@ def run_changes(fields: dict, ctx: Context):
     c["view"] = view(
         headline(
             f"Clicks {before['clicks']:,} → {now_t['clicks']:,} ({diff:+,})",
-            f"{labels[0]} against {labels[1]} · {data['site']}",
+            f"{labels[0]} against {labels[1]} · {data['site']} · totals from the {source}",
             None,
             {"fail": len(base["losers"]), "warn": 0, "pass": len(base["winners"])},
         ),

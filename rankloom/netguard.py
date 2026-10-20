@@ -115,6 +115,37 @@ class _PinnedHTTPS(http.client.HTTPSConnection):
         self.sock = self._ctx.wrap_socket(sock, server_hostname=self.host)
 
 
+def offered_encoding(url: str, timeout: float = 10.0) -> str:
+    """The Content-Encoding the server picks when Brotli is acceptable too, read from the
+    response headers alone (the body is never read: this library cannot decode Brotli).
+
+    The main fetch asks for gzip and deflate only, so a server that offers Brotli and not gzip
+    answered it uncompressed - and the audit said "turn on compression" to a site that had it.
+    Same checks as `safe_fetch`: public addresses, standard ports, the checked address pinned.
+    """
+    scheme, host, port, path = check_url(url)
+    ip = resolve_public(host, port)
+    cls = _PinnedHTTPS if scheme == "https" else _PinnedHTTP
+    conn = cls(host, ip, port, timeout)
+    try:
+        conn.request(
+            "GET",
+            path,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+                "Accept-Encoding": "br, gzip, deflate",
+                "Host": host,
+            },
+        )
+        resp = conn.getresponse()
+        return (resp.getheader("content-encoding") or "").strip().lower()
+    except (OSError, http.client.HTTPException, ssl.SSLError) as exc:
+        raise FetchFailed(f"Could not fetch {url}: {exc}") from exc
+    finally:
+        conn.close()
+
+
 def safe_fetch(
     url: str, *, max_bytes: int = 3_000_000, timeout: float = 15.0, max_redirects: int = 5
 ) -> Response:

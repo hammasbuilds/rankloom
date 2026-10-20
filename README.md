@@ -78,7 +78,7 @@ Output: 36/100  (7 fail, 11 warn, 3 pass)
   FAIL  Meta description of 70-160 characters: No meta description.
   FAIL  Mobile viewport set: No viewport meta tag.
   FAIL  robots.txt lets crawlers in: robots.txt blocks every crawler with Disallow: /.
-  FAIL  Images have alt text: 3 of 3 images have no alt attribute.
+  FAIL  Images have alt text: 3 of 3 images have no alt attribute: a.png, b.png, c.png.
   WARN  Exactly one H1 heading: 2 H1 heading(s): "One", "Two"
   WARN  Structured data present: No JSON-LD structured data. 1 block(s) are not valid JSON.
   WARN  Short redirect chain: 2 redirect(s) before the page. http://bad.example -> http://www.bad.example/
@@ -145,7 +145,7 @@ ignores.
 ## Checks
 
 ```bash
-uv run pytest                      # 129 tests, no network: every engine, the HTTP API end to end, RFC 6238 vectors
+uv run pytest                      # 172 tests, no network: every engine, the HTTP API end to end, RFC 6238 vectors
 uv run ruff check . && uv run ruff format --check .
 uv run python scripts/ui_check.py  # headless Chrome: every sub-tool, Lead List, Clients, a report, 2-step, phone width
 ```

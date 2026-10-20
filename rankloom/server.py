@@ -63,6 +63,10 @@ LEAD_COLUMNS = {
     "address": ("address", "street", "full address", "location"),
     "city": ("city", "town"),
     "category": ("category", "type", "trade", "industry"),
+    "status": ("status", "stage"),
+    "notes": ("notes", "note", "comments"),
+    "score": ("score", "opportunity"),
+    "problems": ("problems", "issues"),
 }
 EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,255}\.[^@\s]{2,}$")
 
@@ -81,6 +85,7 @@ LIMITS = {
     "forgot-ip": (5, 3600),
     "run-user": (30, 600),
     "github-user": (60, 600),
+    "reauth-user": (6, 900),
 }
 
 
@@ -140,6 +145,14 @@ class App:
     def clear_limit(self, family: str, key: str) -> None:
         self.db.run("DELETE FROM attempts WHERE bucket = ?", f"{family}:{key}")
 
+    def forgive_one(self, family: str, key: str) -> None:
+        """Take back the attempt just counted: a correct sign-in is not an attack, and an office
+        behind one address must not lock itself out by signing in."""
+        self.db.run(
+            "DELETE FROM attempts WHERE rowid = (SELECT MAX(rowid) FROM attempts WHERE bucket = ?)",
+            f"{family}:{key}",
+        )
+
     # --- sessions -----------------------------------------------------------------------------
 
     def create_session(self, user_id: int, ua: str, ip: str, mfa_pending: bool) -> str:
@@ -193,8 +206,13 @@ def _csv_safe(value) -> str:
     return "'" + v if v[:1] in ("=", "+", "-", "@", "\t", "\r") else v
 
 
+def _csv_unsafe(value: str) -> str:
+    """Undo _csv_safe on the way back in, so an exported file re-imports as it left."""
+    return value[1:] if value[:1] == "'" and value[1:2] in ("=", "+", "-", "@", "\t", "\r") else value
+
+
 def import_leads(db, user_id: int, text: str) -> tuple[int, int]:
-    from .engines.leads import save_lead
+    from .engines.leads import opportunity, save_lead
 
     text = text.lstrip("\ufeff")
     if not text.strip():
@@ -209,14 +227,33 @@ def import_leads(db, user_id: int, text: str) -> tuple[int, int]:
         raise InputProblem("The CSV needs a name (or business) column.")
     added = skipped = 0
     for row in reader:
-        lead = {k: str(row.get(c) or "").strip() for k, c in cols.items() if c}
+        lead = {k: _csv_unsafe(str(row.get(c) or "").strip()) for k, c in cols.items() if c}
         if not lead.get("name"):
             skipped += 1
             continue
-        lead["source"] = "CSV import"
-        lead["problems"] = [] if lead.get("website") else ["no website listed"]
-        lead["opportunity"] = None if lead.get("website") else 90
-        save_lead(db, user_id, lead)
+        lead["source"] = lead.get("source") or "CSV import"
+        problems = [p.strip() for p in lead.pop("problems", "").split(";") if p.strip()]
+        lead["problems"] = problems or ([] if lead.get("website") else ["no website listed"])
+        score = lead.pop("score", "")
+        # The same rule as a searched lead: no website listed is a lead to check, not proof.
+        lead["opportunity"] = (
+            max(0, min(100, int(score))) if score.isdigit()
+            else None if lead.get("website") else opportunity({})
+        )
+        status = lead.pop("status", "").lower()
+        notes = lead.pop("notes", "")
+        lead_id = save_lead(db, user_id, lead)
+        if status in LEAD_STATUSES or notes:
+            db.run(
+                "UPDATE leads SET status = CASE WHEN ? != '' THEN ? ELSE status END, "
+                "notes = CASE WHEN ? != '' THEN ? ELSE notes END WHERE id = ? AND user_id = ?",
+                status if status in LEAD_STATUSES else "",
+                status,
+                notes[:4000],
+                notes[:4000],
+                lead_id,
+                user_id,
+            )
         added += 1
         if added >= 5000:
             break
@@ -446,6 +483,7 @@ class Handler(BaseHTTPRequestHandler):
         if not security.verify_password(password, user["pw_hash"]):
             raise ApiError(401, "That email and password do not match.")
         self.app.clear_limit("login-email", email)
+        self.app.forgive_one("login-ip", self.ip)
         old = self._token()
         if old:
             self.app.db.run("DELETE FROM sessions WHERE token_hash = ?", security.token_hash(old))
@@ -559,9 +597,12 @@ class Handler(BaseHTTPRequestHandler):
     def change_password(self):
         s = self.need_session()
         b = self.body()
+        if self.app.limited("reauth-user", str(s["user_id"])):
+            raise ApiError(429, "Too many tries. Wait a few minutes and try again.")
         user = self.app.db.one("SELECT * FROM users WHERE id = ?", s["user_id"])
         if not security.verify_password(str(b.get("current", "")), user["pw_hash"]):
             raise ApiError(400, "Your current password is not right.", field="current")
+        self.app.clear_limit("reauth-user", str(s["user_id"]))
         new = str(b.get("new", ""))
         problem = security.password_problem(new, user["email"])
         if problem:
@@ -669,9 +710,23 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(200, {"ok": True, "recovery_codes": codes})
 
     def _password_and_code(self, s, b) -> dict:
+        """Re-check the password, and the authenticator code when 2-step is on.
+
+        Both are checked here, not by each caller: making new recovery codes once checked
+        only the password, so a stolen session plus the password minted permanent bypass codes.
+        """
+        if self.app.limited("reauth-user", str(s["user_id"])):
+            raise ApiError(429, "Too many tries. Wait a few minutes and try again.")
         user = self.app.db.one("SELECT * FROM users WHERE id = ?", s["user_id"])
         if not security.verify_password(str(b.get("password", "")), user["pw_hash"]):
             raise ApiError(400, "Your password is not right.", field="password")
+        if user["totp_secret"] is not None:
+            secret = self.app.box.open(user["totp_secret"])
+            step = security.verify_totp(secret, str(b.get("code", "")), user["totp_last_step"])
+            if step is None:
+                raise ApiError(400, "That code does not match.", field="code")
+            self.app.db.run("UPDATE users SET totp_last_step = ? WHERE id = ?", step, user["id"])
+        self.app.clear_limit("reauth-user", str(s["user_id"]))
         return user
 
     def tfa_disable(self):
@@ -680,9 +735,6 @@ class Handler(BaseHTTPRequestHandler):
         user = self._password_and_code(s, b)
         if user["totp_secret"] is None:
             raise ApiError(409, "2-step verification is already off.")
-        secret = self.app.box.open(user["totp_secret"])
-        if security.verify_totp(secret, str(b.get("code", "")), user["totp_last_step"]) is None:
-            raise ApiError(400, "That code does not match.", field="code")
         self.app.db.run(
             "UPDATE users SET totp_secret = NULL, totp_pending = NULL, recovery_codes = '[]', "
             "totp_last_step = 0 WHERE id = ?",

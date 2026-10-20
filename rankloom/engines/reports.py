@@ -21,8 +21,53 @@ from .common import (
     table,
     view,
 )
+from .site_audit import SPEED_CAVEAT
 
 MONTH = 30 * 86400
+
+# What each kind of run is called in a client's report. The run summaries are ours ("33 questions
+# for dentist", "Imported amherstdental.com: 20 queries, 11 pages") and read as jargon there.
+WORK = {
+    ("site-audit", "page"): "Website health check",
+    ("site-audit", "crawl"): "Full-site crawl for broken pages and duplicates",
+    ("site-audit", "local"): "Local search and maps check",
+    ("ai-visibility", "readiness"): "AI assistant readiness check",
+    ("ai-visibility", "questions"): "Researched the questions customers ask AI assistants",
+    ("ai-visibility", "answers"): "Checked how AI assistants answer about the business",
+    ("search-performance", "import"): "Imported Google Search Console data",
+    ("search-performance", "opportunities"): "Found search opportunities close to page one",
+    ("search-performance", "changes"): "Compared search traffic between periods",
+    ("content-studio", "keywords"): "Keyword research",
+    ("content-studio", "brief"): "Content brief",
+    ("content-studio", "draft"): "Content draft",
+    ("content-studio", "grade"): "Graded page content against its keyword",
+}
+TOPIC_FIELDS = ("seed", "topic", "keyword", "niche")
+
+
+def work_log(runs: list[dict]) -> list[str]:
+    """One line per kind of work and topic, newest first, with how many times it was done."""
+    seen: dict[str, list] = {}
+    for r in runs:  # newest first
+        label = WORK.get((r["tool"], r["subtool"]))
+        if not label:
+            continue
+        inp = r["input"]
+        topic = next((str(inp[k]).strip() for k in TOPIC_FIELDS if str(inp.get(k, "")).strip()), "")
+        address = str(inp.get("url") or inp.get("site") or "").strip()
+        if address:
+            parts = urlsplit(address if "://" in address else "https://" + address)
+            address = parts.netloc.lower().removeprefix("www.") + parts.path.rstrip("/")
+        line = label + (f" of {address}" if address else "") + (f": “{topic}”" if topic else "")
+        if line in seen:
+            seen[line][0] += 1
+        else:
+            seen[line] = [1, r["created_at"]]
+    out = []
+    for line, (n, at) in seen.items():
+        day = datetime.date.fromtimestamp(at).strftime("%d %b").lstrip("0")
+        out.append(f"{line} ({day}" + (f", {n} times)" if n > 1 else ")"))
+    return out
 
 
 def _host(url: str) -> str:
@@ -55,14 +100,20 @@ def build(client: dict, ctx: Context) -> dict:
         sections["audit"] = site_audit.audit(site, fetch=ctx.fetch)
     except (FetchFailed, FetchRefused) as exc:
         sections["audit_error"] = str(exc)
-    try:
-        sections["local"] = local_seo.audit(site, client.get("city", ""), ctx.fetch)
-    except (FetchFailed, FetchRefused):
-        pass
-    try:
-        sections["ai"] = ai_visibility.readiness(site, ctx.fetch)
-    except (FetchFailed, FetchRefused):
-        pass
+    # A bot check is not the client's site: nothing from it goes in the report.
+    if (sections.get("audit") or {}).get("blocked"):
+        sections["audit_error"] = (
+            f"The website check could not read the real page: {sections.pop('audit')['blocked']}."
+        )
+    else:
+        try:
+            sections["local"] = local_seo.audit(site, client.get("city", ""), ctx.fetch)
+        except (FetchFailed, FetchRefused):
+            pass
+        try:
+            sections["ai"] = ai_visibility.readiness(site, ctx.fetch)
+        except (FetchFailed, FetchRefused):
+            pass
     for key, sub in (("audit", "page"), ("local", "local"), ("ai", "readiness")):
         if key in sections:
             sections[f"{key}_before"] = previous_scores(ctx.db, ctx.user_id, host, sub)
@@ -70,17 +121,19 @@ def build(client: dict, ctx: Context) -> dict:
     if gsc_id:
         try:
             data = search_perf.load_dataset(ctx, gsc_id)
+            rows, source = search_perf.site_rows(data)
             sections["gsc"] = {
                 "label": data["label"],
-                "now": search_perf.totals(data["pages"] or data["queries"]),
-                "before": search_perf.totals(data["pages"] or data["queries"], "prev_")
-                if data.get("compare")
-                else None,
+                "period": search_perf.period_text(data),
+                "source": source,
+                "labels": data.get("labels") or [],
+                "now": search_perf.totals(rows),
+                "before": search_perf.totals(rows, "prev_") if data.get("compare") else None,
                 "top": sorted(data["queries"], key=lambda r: -r["clicks"])[:8],
             }
         except InputProblem:
             pass
-    work = []
+    runs = []
     for r in ctx.db.all(
         "SELECT tool, subtool, summary, created_at, input_json FROM runs WHERE "
         "user_id = ? AND status = 'ok' AND created_at > ? ORDER BY id DESC",
@@ -92,8 +145,8 @@ def build(client: dict, ctx: Context) -> dict:
             client["name"].lower() in json.dumps(inp).lower()
         ):
             if r["tool"] != "client-reports":
-                work.append(r["summary"])
-    sections["work"] = work[:25]
+                runs.append({**dict(r), "input": inp})
+    sections["work"] = work_log(runs)[:25]
     return sections
 
 
@@ -124,7 +177,11 @@ def run_report(fields: dict, ctx: Context):
     for key in ("audit", "local", "ai"):
         for c in (s.get(key) or {}).get("checks", []):
             if c["status"] != PASS and c["fix"]:
-                fixes.append((c["status"], c["weight"], c["label"], c["fix"]))
+                fix = c["fix"]
+                if c["id"] in ("speed", "slow"):
+                    # The time was taken from our server; the client must not read it as fact.
+                    fix = f"Speed {SPEED_CAVEAT}. {fix}"
+                fixes.append((c["status"], c["weight"], c["label"], fix))
     fixes.sort(key=lambda f: (f[0] != FAIL, -f[1]))
     gsc = s.get("gsc")
     gsc_block = None
@@ -140,8 +197,13 @@ def run_report(fields: dict, ctx: Context):
             ],
             ["Average position", f"{n['position']:.1f}", f"{b['position']:.1f}" if b else "-"],
         ]
+        when = gsc["labels"] or ["This period", "Previous"]
         gsc_block = table(
-            "Google search results", ["", "This period", "Previous"], rows, gsc["label"]
+            "Google search results",
+            ["", when[0], when[1] if len(when) > 1 else "Previous"],
+            rows,
+            (gsc["period"] or "Period not stated in the export")
+            + f" · from Google Search Console ({gsc['source']}).",
         )
     score = s["audit"]["score"] if "audit" in s else None
     s["view"] = view(

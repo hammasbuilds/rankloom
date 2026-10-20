@@ -38,6 +38,8 @@
       el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
     }
   }
+  // DOM append() writes null as the text "null"; conditional parts pass null when absent.
+  function put(el, ...kids) { el.append(...kids.flat().filter((k) => k !== null && k !== undefined && k !== false)); return el; }
   function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); return el; }
   // Native append/replaceWith turn a null child into the text "null"; these skip it.
   function put(el, ...kids) { append(el, kids); return el; }
@@ -252,7 +254,8 @@
     const w = Math.min(1320, screen.availWidth - 40);
     const hgt = Math.min(900, screen.availHeight - 60);
     const win = window.open(path, "_blank", `popup=yes,width=${w},height=${hgt}`);
-    if (win) win.opener = null; else window.open(path, "_blank");
+    if (win) win.opener = null;
+    else toast("Your browser blocked the new window. Allow pop-ups for this site, or open the link with a middle click.");
   }
   function popBtn(path, label) {
     return h("button", { class: "pop", type: "button", title: `Open ${label} in a new window`,
@@ -338,21 +341,31 @@
         h("div", { class: "foot-actions" },
           h("button", { class: "btn ghost small", type: "button", onclick: toggleTheme }, icon("moon"), h("span", { text: "Theme" })),
           h("button", { class: "btn ghost small", type: "button", onclick: signOut }, icon("logout"), h("span", { text: "Sign out" }))));
-      const sidebar = h("aside", { class: "sidebar", "aria-label": "Main" },
+      const sidebar = h("aside", { class: "sidebar", id: "sidebar", "aria-label": "Main" },
         h("a", { class: "brand", href: "/app", "data-link": true }, logo(), "Rankloom"),
         top, h("div", { class: "nav-label", text: "Tools" }), nav, foot);
       const main = h("main", { class: "main", id: "main" });
       const wrap = h("div", { class: "shell" });
       const topbar = h("div", { class: "topbar" },
-        h("button", { class: "btn ghost icon-btn", type: "button", "aria-label": "Open menu",
+        h("button", { class: "btn ghost icon-btn menu-btn", type: "button", "aria-label": "Open menu",
+          "aria-expanded": "false", "aria-controls": "sidebar",
           onclick: () => wrap.classList.add("nav-open") }, icon("menu")),
         h("a", { class: "brand", href: "/app", "data-link": true }, logo(), "Rankloom"));
       const scrim = h("div", { class: "scrim", hidden: true });
       wrap.addEventListener("click", (ev) => {
         if (ev.target.closest(".sidebar a[data-link]") || ev.target === scrim) wrap.classList.remove("nav-open");
       });
-      new MutationObserver(() => { scrim.hidden = !wrap.classList.contains("nav-open"); })
-        .observe(wrap, { attributes: true, attributeFilter: ["class"] });
+      new MutationObserver(() => {
+        const open = wrap.classList.contains("nav-open");
+        scrim.hidden = !open;
+        topbar.querySelector(".menu-btn").setAttribute("aria-expanded", String(open));
+      }).observe(wrap, { attributes: true, attributeFilter: ["class"] });
+      document.addEventListener("keydown", (ev) => {
+        if (ev.key === "Escape" && wrap.classList.contains("nav-open")) {
+          wrap.classList.remove("nav-open");
+          topbar.querySelector(".menu-btn").focus();
+        }
+      });
       wrap.append(sidebar, scrim, h("div", null, topbar, main));
       clear(root).append(wrap);
       state.shell = { wrap, main };
@@ -598,7 +611,7 @@
   // ---------------------------------------------------------------- overview
   async function overview(main) {
     const first = (state.user.name || "").split(" ")[0];
-    const p = page(main, `Welcome back, ${first}`, `${state.tools.length} tools, each with its own sub-tools. Open any of them here, or in a window of its own to use several side by side.`);
+    const p = page(main, `Welcome, ${first}`, `${state.tools.length} tools, each with its own sub-tools. Open any of them here, or in a window of its own to use several side by side.`);
     const body = h("div", { class: "loading", text: "Loading your workspace…" });
     p.append(body);
     let d;
@@ -660,7 +673,7 @@
       h("button", { class: "btn small", type: "button", onclick: () => popOut(location.pathname + location.hash) }, icon("external"), "Open in new window")]);
     tabs(p, [["tools", "Sub-tools"], ["dashboard", "Dashboard"], ["about", "About"]], "tools", (key, panel) => {
       if (key === "tools") {
-        panel.append(h("div", { class: "subgrid" }, tool.subtools.map((x) => h("div", { class: "card subcard" },
+        put(panel, h("div", { class: "subgrid" }, tool.subtools.map((x) => h("div", { class: "card subcard" },
           h("div", { class: "row-between" }, h("h2", null, h("a", { href: `/t/${tool.slug}/${x.slug}`, "data-link": true, text: x.name })), subStatus(x)),
           h("p", { class: "muted", text: x.tagline }),
           h("div", { class: "head-actions mt" },
@@ -672,8 +685,8 @@
   }
 
   function aboutTool(panel, tool) {
-    panel.append(h("div", { class: "card about" }, h("h2", { text: `What ${tool.name} does` }), h("p", { class: "mt", text: tool.about })));
-    for (const x of tool.subtools) panel.append(aboutCard(x));
+    put(panel, h("div", { class: "card about" }, h("h2", { text: `What ${tool.name} does` }), h("p", { class: "mt", text: tool.about })));
+    for (const x of tool.subtools) put(panel, aboutCard(x));
   }
   function aboutCard(x) {
     return h("div", { class: "card about" },
@@ -687,7 +700,7 @@
 
   async function dashboardPanel(panel, tool) {
     const body = h("div", { class: "loading", text: "Loading…" });
-    panel.append(body);
+    put(panel, body);
     let st, runs;
     try { [st, runs] = await Promise.all([api("GET", `/api/tools/${tool.slug}/stats`), api("GET", `/api/tools/${tool.slug}/runs`)]); }
     catch (e) { clear(body).append(e.message); return; }
@@ -749,13 +762,13 @@
       if (key === "run") runPanel(panel, tool, sub);
       else if (key === "workspace") (PAGES[`${tool.slug}/${sub.slug}`] || notConnected)(panel);
       else if (key === "history") subHistory(panel, tool, sub);
-      else panel.append(aboutCard(sub));
+      else put(panel, aboutCard(sub));
     });
   }
 
   async function subHistory(panel, tool, sub) {
     const body = h("div", { class: "loading", text: "Loading…" });
-    panel.append(body);
+    put(panel, body);
     try {
       const d = await api("GET", `/api/tools/${tool.slug}/runs`);
       swap(body, historyCard(tool, d.runs.filter((r) => r.subtool === sub.slug), false));
@@ -764,13 +777,13 @@
 
   async function runPanel(panel, tool, sub) {
     if (sub.status === "needs-ai") {
-      panel.append(h("div", { class: "notice warn" }, icon("alert"), h("div", null,
+      put(panel, h("div", { class: "notice warn" }, icon("alert"), h("div", null,
         h("strong", { text: `${sub.name} needs an AI engine. ` },),
         "Set one up on the server (see the README: RANKLOOM_AI). Until then this form shows what it will take.")));
     }
     const card = h("div", { class: "card" });
     const result = h("div");
-    panel.append(card, result);
+    put(panel, card, result);
     const params = new URLSearchParams(location.search);
     const values = {};
     for (const f of sub.fields) if (params.get(f.name)) values[f.name] = params.get(f.name);
@@ -833,7 +846,7 @@
   // ---------------------------------------------------------------- Lead List
   async function leadList(panel) {
     const body = h("div", { class: "loading", text: "Loading leads…" });
-    panel.append(body);
+    put(panel, body);
     let d;
     try { d = await api("GET", "/api/leads"); } catch (e) { clear(body).append(e.message); return; }
     const filter = h("select", { "aria-label": "Status" }, h("option", { value: "", text: "All statuses" }),
@@ -906,7 +919,7 @@
   // ---------------------------------------------------------------- Clients
   async function clientsPage(panel) {
     const body = h("div", { class: "loading", text: "Loading clients…" });
-    panel.append(body);
+    put(panel, body);
     let d;
     try { d = await api("GET", "/api/clients"); } catch (e) { clear(body).append(e.message); return; }
     const editor = h("div", { class: "card", hidden: true });
@@ -958,19 +971,19 @@
 
   // ---------------------------------------------------------------- Job Radar
   function notConnected(panel, message) {
-    panel.append(h("div", { class: "notice warn" }, icon("alert"), h("div", null,
+    put(panel, h("div", { class: "notice warn" }, icon("alert"), h("div", null,
       h("strong", { text: "Job Radar is not connected. " }), message || "This page has nothing to show yet.",
       " ", h("a", { href: "/t/job-radar/crawl", "data-link": true, text: "Open Crawl" }))));
   }
 
   async function jrLoad(panel, path) {
     const body = h("div", { class: "loading", text: "Reading job-radar…" });
-    panel.append(body);
+    put(panel, body);
     try { const d = await api("GET", path); body.remove(); return d; }
     catch (e) {
       body.remove();
       if (e.data && e.data.not_connected) notConnected(panel, e.message);
-      else panel.append(h("div", { class: "notice bad" }, icon("alert"), h("div", { text: e.message })));
+      else put(panel, h("div", { class: "notice bad" }, icon("alert"), h("div", { text: e.message })));
       return null;
     }
   }
@@ -992,11 +1005,12 @@
     const d = await jrLoad(panel, `/api/jobradar/jobs?${qs()}`);
     if (!d) return;
     const rerun = () => {
-      history.replaceState({}, "", `${location.pathname}?${qs()}#workspace`);
+      history.pushState({}, "", `${location.pathname}?${qs()}#workspace`);
       clear(panel); jrJobs(panel);
     };
     const selects = JR_FILTERS.map(([key, label]) => {
       const opts = JR_FIXED[key] || (d.facets[key === "country" ? "country" : key] || []).map(([v, n]) => [v, `${v} (${n})`]);
+      if (f[key] && !opts.some(([v]) => v === f[key])) opts.unshift([f[key], `${f[key]} (0)`]);
       const sel = h("select", { "aria-label": label }, h("option", { value: "", text: `${label}: any` }),
         opts.map(([v, l]) => h("option", { value: v, text: l })));
       sel.value = f[key];
@@ -1008,37 +1022,48 @@
     const reach = h("input", { type: "checkbox", id: "jr-reach" });
     reach.checked = f.reachable === "1";
     reach.addEventListener("change", () => { f.reachable = reach.checked ? "1" : ""; rerun(); });
-    const chips = h("div", { class: "chips" }, d.facets.country.slice(0, 40).map(([c, n]) =>
+    const chips = h("div", { class: "chips collapsible" }, d.facets.country.slice(0, 40).map(([c, n]) =>
       h("button", { type: "button", class: `chip${f.country === c ? " on" : ""}`, onclick: () => { f.country = f.country === c ? "" : c; rerun(); } },
         c, h("span", { text: String(n) }))));
-    const route = (r) => r.reachable
-      ? badge(r.route.includes("sponsorship") || ["europe", "gulf", "asia", "pakistan", "remote"].some((x) => r.route.split(",").includes(x)) ? "pass" : "warn",
-        r.route.split(",").includes("sponsorship") ? "Sponsors visa" : r.route.split(",").includes("remote") ? "Remote route"
-          : /,|^(europe|gulf|asia|pakistan)$/.test(r.route) ? "Route in" : r.route)
-      : badge("fail", r.route);
-    panel.append(
+    const moreChips = h("button", { class: "btn small ghost more-chips", type: "button",
+      onclick: () => { chips.classList.toggle("expanded"); moreChips.textContent = chips.classList.contains("expanded") ? "Fewer countries" : "All countries"; } }, "All countries");
+    // Green only for a stated way in; amber where the employer usually arranges the pass but
+    // did not say, or the posting is silent; red where it refuses, locks or wants citizens.
+    const route = (r) => {
+      const parts = r.route.split(",");
+      if (r.route_kind === "open") return badge("pass", parts.includes("sponsorship") ? "Sponsors visa" : parts.includes("remote") ? "Remote, open to you" : "In Pakistan");
+      if (r.route_kind === "pass") return badge("warn", "Work pass usual, not stated");
+      if (r.route_kind === "unclear") return badge("warn", r.route.replace(/^(onsite|hybrid|remote), /, ""));
+      return badge("fail", r.route);
+    };
+    const labels = Object.fromEntries(JR_FILTERS);
+    const active = Object.entries(f).filter(([k, v]) => v && k !== "reachable").map(([k, v]) =>
+      h("button", { type: "button", class: "chip on removable", "aria-label": `Remove filter ${labels[k] || "Search"}: ${v}`,
+        onclick: () => { f[k] = ""; rerun(); } }, `${labels[k] || "Search"}: ${(JR_FIXED[k] || []).find(([x]) => x === v)?.[1] || v}`));
+    put(panel, 
       h("div", { class: "grid tiles" },
         tile("In the lens", String(d.total), "junior, target countries"),
         tile("Matching", String(d.matched), "with these filters"),
-        tile("Countries", String(d.facets.country.length), "with at least one role"),
-        tile("Reachable", String(d.rows.filter((r) => r.reachable).length), "of those shown")),
+        tile("Countries", String(d.countries), "in these matches"),
+        tile("With a way in", String(d.reachable), `of the ${d.matched} matching`)),
       h("div", { class: "card" },
-        h("div", { class: "card-head" }, h("h2", { text: "Search by country" }), h("p", { text: "Click a country; click again to clear" })), chips),
+        h("div", { class: "card-head" }, h("h2", { text: "Search by country" }), h("p", { text: "Click a country; click again to clear" })), chips, moreChips),
       h("div", { class: "card" },
         h("div", { class: "toolbar wrap" }, search, ...selects,
-          h("label", { class: "check", for: "jr-reach" }, reach, " Only roles open to me from Pakistan"),
+          h("label", { class: "check", for: "jr-reach" }, reach, " Only roles with a way in from Pakistan"),
           h("button", { class: "btn small ghost", type: "button", onclick: () => { for (const k of Object.keys(f)) f[k] = ""; rerun(); } }, "Clear filters")),
-        d.rows.length ? h("div", { class: "table-wrap" }, h("table", { class: "table jobs" },
+        active.length ? h("div", { class: "active-filters" }, h("span", { class: "muted small-text", text: "Filtering by:" }), active) : null,
+        d.rows.length ? h("div", { class: "table-wrap" }, h("table", { class: "table jobs cards" },
           h("thead", null, h("tr", null, ["Role", "Company", "Country", "Title family", "Place", "Terms", "Experience", "Route", "Posted"].map((c) => h("th", { text: c })))),
           h("tbody", null, d.rows.map((r) => h("tr", null,
             h("td", null, safeHref(r.url) ? h("a", { href: r.url, target: "_blank", rel: "noopener noreferrer", text: r.title }) : r.title),
-            h("td", { text: r.company }),
-            h("td", { text: r.countries.join(", ") || "Not stated" }),
-            h("td", null, h("div", { text: r.family }), h("div", { class: "muted small-text", text: r.track })),
-            h("td", { text: r.workplace }), h("td", { text: r.terms }),
-            h("td", { text: r.years === null ? "Not stated" : `${r.years} yr` }),
-            h("td", null, route(r)),
-            h("td", { class: "muted nowrap", text: r.posted ? r.posted.slice(0, 10) : "" }))))))
+            h("td", { "data-label": "Company", text: r.company }),
+            h("td", { "data-label": "Country", text: r.countries.join(", ") || "Not stated" }),
+            h("td", { "data-label": "Title" }, h("span", { text: r.family }), h("span", { class: "muted small-text", text: ` · ${r.track}` })),
+            h("td", { "data-label": "Place", text: r.workplace }), h("td", { "data-label": "Terms", text: r.terms }),
+            h("td", { "data-label": "Experience", text: r.years === null ? "Not stated" : `${r.years} yr` }),
+            h("td", { "data-label": "Route" }, route(r)),
+            h("td", { class: "muted nowrap", "data-label": "Posted", text: r.posted ? r.posted.slice(0, 10) : "" }))))))
           : h("p", { class: "muted", text: "No roles match these filters." }),
         d.matched > d.rows.length ? h("p", { class: "muted small-text", text: `Showing the newest ${d.rows.length} of ${d.matched}. Narrow the filters to see the rest.` }) : null));
   }
@@ -1070,7 +1095,7 @@
   async function jrDirectory(panel, kind, title, note, withFamily) {
     const d = await jrLoad(panel, `/api/jobradar/directory?kind=${encodeURIComponent(kind)}${withFamily ? `&with=${withFamily}` : ""}`);
     if (!d) return;
-    panel.append(h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: title }), h("p", { text: note })),
+    put(panel, h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: title }), h("p", { text: note })),
       d.entries.length ? directoryTable(d.entries) : h("p", { class: "muted", text: "Run a crawl to fill this list." })));
     return d;
   }
@@ -1078,14 +1103,14 @@
   async function jrFellowships(panel) {
     const d = await jrDirectory(panel, "Fellowship / paid programme", "Fellowships and paid programmes",
       "Pay is stated only where a live posting confirmed it; otherwise check the official page", "fellowship");
-    if (d) panel.append(h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Programme postings open now" }), h("p", { text: "Found by the crawl on company boards" })),
+    if (d) put(panel, h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Programme postings open now" }), h("p", { text: "Found by the crawl on company boards" })),
       postingsTable(d.postings, "No fellowship or residency postings in the last crawl.")));
   }
 
   async function jrPlatforms(panel) {
     const d = await jrDirectory(panel, "AI work platform", "AI work platforms",
       "Contract and small-contract work training and checking AI models", "platforms");
-    if (d) panel.append(h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "AI training and evaluation roles open now" }),
+    if (d) put(panel, h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "AI training and evaluation roles open now" }),
       h("p", { text: "Model evaluator, AI data trainer, annotator and similar posts found by the crawl" })),
       postingsTable(d.postings, "No AI training or evaluation posts in the last crawl.")));
   }
@@ -1093,7 +1118,7 @@
   async function jrPakistan(panel) {
     const d = await jrLoad(panel, "/api/jobradar/directory?kind=x&with=pakistan");
     if (!d) return;
-    panel.append(h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Government and public-sector CS / IT / AI posts" }),
+    put(panel, h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Government and public-sector CS / IT / AI posts" }),
       h("p", { text: "National Job Portal and public employers in the crawl" })),
       postingsTable(d.postings, "No public-sector computing posts in the last crawl.")));
     await jrDirectory(panel, "Pakistan grant / funding", "Grants for junior scientists and researchers", "HEC, Ignite and other funders");
@@ -1117,7 +1142,7 @@
     const search = h("input", { type: "search", placeholder: "Search name, product or city", value: f.q, "aria-label": "Search companies" });
     search.addEventListener("change", () => { f.q = search.value; rerun(); });
     const link = (href, text) => safeHref(href) ? h("a", { href, target: "_blank", rel: "noopener noreferrer", text }) : null;
-    panel.append(
+    put(panel, 
       h("div", { class: "grid tiles" }, tile("Companies", String(d.total), "last three years of batches"),
         tile("Hiring now", String(d.hiring), "say so on YC"), tile("Matching", String(d.matched), "with these filters"),
         tile("LinkedIn read", String(d.linkedin_read), "from YC pages; the rest are searches")),
@@ -1128,11 +1153,13 @@
           h("tbody", null, d.rows.map((r) => h("tr", null,
             h("td", null, h("strong", { text: r.name }), h("div", { class: "muted small-text", text: [r.one_liner, r.location].filter(Boolean).join(" · ") })),
             h("td", { class: "nowrap", text: r.batch }),
-            h("td", null, r.hiring ? badge("pass", "Hiring") : h("span", { class: "pill", text: "Not hiring" })),
+            h("td", null, r.status && r.status !== "Active" ? badge("fail", r.status)
+              : r.hiring ? badge("pass", "Hiring") : h("span", { class: "pill", text: "Not hiring" })),
             h("td", null, link(r.linkedin, r.linkedin_source === "yc page" ? "Profile" : "Search")),
             h("td", null, link(r.website, "Website")),
             h("td", null, link(r.yc_url, "YC page")),
-            h("td", null, link(r.jobs_url, r.hiring ? "Open roles" : "Jobs page"))))))) : h("p", { class: "muted", text: "No companies match." })));
+            h("td", null, link(r.jobs_url, r.hiring ? "Open roles" : "Jobs page"))))))) : h("p", { class: "muted", text: "No companies match." }),
+        d.matched > d.rows.length ? h("p", { class: "muted small-text", text: `Showing ${d.rows.length} of ${d.matched}. Narrow by batch or search to see the rest.` }) : null));
   }
 
   async function jrAccelerators(panel) {
@@ -1145,7 +1172,7 @@
       const link = (href, text) => safeHref(href) ? h("a", { href, target: "_blank", rel: "noopener noreferrer", text }) : text;
       const p = d.programmes.find((x) => x.name === d.programme);
       if (!p) {
-        panel.append(h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Portfolios" })),
+        put(panel, h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Portfolios" })),
           h("p", { class: "muted" }, "No portfolios read yet. ", h("a", { href: "/t/job-radar/crawl", "data-link": true, text: "Open Crawl" }), " and press Read portfolios.")));
       } else {
         const junior = h("input", { type: "checkbox", id: "pf-junior" }); junior.checked = f.junior === "1";
@@ -1155,7 +1182,7 @@
         const family = h("select", { "aria-label": "Title family" }, h("option", { value: "", text: "Title: any" }),
           d.families.map(([v, n]) => h("option", { value: v, text: `${v} (${n})` })));
         family.value = f.family; family.addEventListener("change", () => { f.family = family.value; rerun(); });
-        panel.append(
+        put(panel, 
           h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Portfolios" }), h("p", { text: "Companies each programme backs, read from its job board" })),
             h("div", { class: "chips" }, d.programmes.map((x) => h("button", { type: "button", class: `chip${x.name === d.programme ? " on" : ""}`, onclick: () => { f.programme = x.name; f.q = ""; f.family = ""; rerun(); } },
               x.name, h("span", { text: String(x.ai_roles) }))))),
@@ -1164,9 +1191,12 @@
             tile("Open postings", p.roles.toLocaleString(), "across those companies"),
             tile("AI postings", p.ai_roles.toLocaleString(), "AI titles, data work and fellowships"),
             tile("No senior title", p.junior_ai.toLocaleString(), "of the AI postings")),
-          p.failed ? h("div", { class: "notice warn" }, icon("alert"), h("div", { text: `Part of this board could not be read last time: ${p.failed}` })) : null,
+          ...(p.failed ? [h("div", { class: "notice warn" }, icon("alert"), h("div", { text: `Part of this board could not be read last time: ${p.failed}` }))] : []),
+          ...(!p.roles && p.companies ? [h("div", { class: "notice warn" }, icon("alert"), h("div", null,
+            `${p.name}'s board lists its companies but not its job titles, so its roles cannot be counted or filtered here. `,
+            link(p.board, "Open the board"), " to see them."))] : []),
           h("div", { class: "card" },
-            h("div", { class: "card-head" }, h("h2", { text: `AI roles at ${p.name} companies` }), h("p", { text: "Titles are read from each job's address; open the role for location and full details" })),
+            h("div", { class: "card-head" }, h("h2", { text: `AI roles at ${p.name} companies` }), h("p", { text: "Titles are read from each job's address, which can drop a level word (Staff, Senior) and has no location. Open the role to confirm both." })),
             h("div", { class: "toolbar wrap" }, search, family, h("label", { class: "check", for: "pf-junior" }, junior, " No senior titles"),
               link(p.board, "Open the board")),
             d.roles.length ? h("div", { class: "table-wrap" }, h("table", { class: "table" },
@@ -1177,7 +1207,7 @@
                 h("td", null, h("div", { text: r.family }), h("div", { class: "muted small-text", text: r.track })),
                 h("td", null, r.junior ? badge("pass", r.level) : badge("warn", r.level)))))))
               : h("p", { class: "muted", text: "No AI roles match." }),
-            d.roles_matched > d.roles.length ? h("p", { class: "muted small-text", text: `Showing ${d.roles.length} of ${d.roles_matched}. Search to narrow.` }) : null),
+            ...(d.roles_matched > d.roles.length ? [h("p", { class: "muted small-text", text: `Showing ${d.roles.length} of ${d.roles_matched}. Search to narrow.` })] : [])),
           h("div", { class: "card" },
             h("div", { class: "card-head" }, h("h2", { text: `${p.name} portfolio companies` }), h("p", { text: "Most AI postings first; companies with nothing open are listed too" })),
             h("div", { class: "table-wrap" }, h("table", { class: "table" },
@@ -1214,7 +1244,7 @@
       catch (e) { toast(e.message); }
     };
     if (!d.connected) notConnected(panel, d.error);
-    panel.append(
+    put(panel, 
       h("div", { class: "grid tiles" },
         tile("Last crawl", d.last_run ? ago(Date.parse(d.last_run) / 1000) : "never", d.last_run ? d.last_run.slice(0, 16).replace("T", " ") : ""),
         tile("Jobs in the lens", String(c.lens ?? 0), "junior, target countries"),
@@ -1269,7 +1299,7 @@
     }));
     sec("password", "Change password", "Changing it signs you out everywhere else.").append(form({
       fields: [{ name: "current", label: "Current password", type: "password", autocomplete: "current-password" },
-        { name: "new", label: "New password", type: "password", autocomplete: "new-password", hint: "At least 10 characters." },
+        { name: "new", label: "New password", type: "password", autocomplete: "new-password", hint: "At least 10 characters, not built from your email." },
         { name: "confirm", label: "Repeat new password", type: "password", autocomplete: "new-password" }],
       submit: "Change password", submitClass: "primary",
       onSubmit: async (v, inputs) => {
@@ -1530,7 +1560,7 @@
       const token = new URLSearchParams(location.search).get("token") || "";
       authPage("Set a new password", "Choose a new password. This signs you out on every device.",
         form({
-          fields: [{ name: "password", label: "New password", type: "password", autocomplete: "new-password", hint: "At least 10 characters." },
+          fields: [{ name: "password", label: "New password", type: "password", autocomplete: "new-password", hint: "At least 10 characters, not built from your email." },
             { name: "confirm", label: "Repeat new password", type: "password", autocomplete: "new-password" }],
           submit: "Set password",
           onSubmit: async (v) => {

@@ -71,6 +71,9 @@ def places(trade: str, city: str, limit: int = 50, country: str = "") -> list[di
     url = (
         f"https://nominatim.openstreetmap.org/search?q={q}&format=jsonv2&extratags=1"
         f"&addressdetails=1&limit={min(limit, 50)}"
+        # One spelling per city: without it Lahore leads came back as "Lahore", "لاہور" and
+        # "لاہور کینٹ", and a Lead List search for Lahore found 23 of 42.
+        "&accept-language=en"
     )
     code = country.strip().lower()
     if len(code) == 2 and code.isalpha():  # one country, so "Manchester" means one city
@@ -101,6 +104,9 @@ def places(trade: str, city: str, limit: int = 50, country: str = "") -> list[di
                 "name": name,
                 "category": str(item.get("type") or item.get("category") or ""),
                 "website": tag("website").split(";")[0].strip(),
+                # A chain branch often has no website tag of its own but names its brand.
+                "brand": tag("brand"),
+                "brand_website": tag("brand:website").split(";")[0].strip(),
                 "phone": tag("phone").split(";")[0].strip(),
                 "email": tag("email"),
                 "address": ", ".join(x for x in (street, area) if x),

@@ -1,0 +1,154 @@
+[
+ {
+  "id": "ai-readiness-architecture",
+  "project": "AI Visibility · Readiness",
+  "title": "Can AI answer engines cite you?",
+  "input": "amherstdental.com",
+  "output": "97/100 · 13 AI crawlers allowed",
+  "post": "Can ChatGPT, Perplexity or Claude read and cite a small business's site? We check it.\n\nInput: amherstdental.com. Output: 97/100.\n\n13 named AI crawlers matched against robots.txt (all allowed), 1,697 words in the HTML itself (no JavaScript needed), Organization data with sameAs links, 5 question headings.\nOne warning: no /llms.txt.\n#AISearch #GEO #SEO"
+ },
+ {
+  "id": "ai-readiness-overview",
+  "project": "AI Visibility · Readiness",
+  "title": "Can AI answer engines cite you?",
+  "input": "amherstdental.com",
+  "output": "97/100 · 13 AI crawlers allowed",
+  "post": "Can ChatGPT, Perplexity or Claude read and cite a small business's site? We check it.\n\nInput: amherstdental.com. Output: 97/100.\n\n13 named AI crawlers matched against robots.txt (all allowed), 1,697 words in the HTML itself (no JavaScript needed), Organization data with sameAs links, 5 question headings.\nOne warning: no /llms.txt.\n#AISearch #GEO #SEO"
+ },
+ {
+  "id": "client-report-architecture",
+  "project": "Client Reports",
+  "title": "A monthly report, assembled",
+  "input": "Amherst Dental",
+  "output": "October 2026 · 91 / 100 / 97",
+  "post": "A monthly SEO report that keeps its caveats.\n\nInput: one client. Output: an October 2026 report - website health 91, local 100, AI readiness 97, clicks 1,287 vs 1,332.\n\nChecks re-run on the day, Search Console totals from one table, and the speed fix kept with 'confirm with a speed test first'.\n#SEO #Agency"
+ },
+ {
+  "id": "client-report-overview",
+  "project": "Client Reports",
+  "title": "A monthly report, assembled",
+  "input": "Amherst Dental",
+  "output": "October 2026 · 91 / 100 / 97",
+  "post": "A monthly SEO report that keeps its caveats.\n\nInput: one client. Output: an October 2026 report - website health 91, local 100, AI readiness 97, clicks 1,287 vs 1,332.\n\nChecks re-run on the day, Search Console totals from one table, and the speed fix kept with 'confirm with a speed test first'.\n#SEO #Agency"
+ },
+ {
+  "id": "content-studio-architecture",
+  "project": "Content Studio",
+  "title": "From one seed to a graded page",
+  "input": "emergency dentist · us",
+  "output": "90 searches · brief · 54/100 grade",
+  "post": "Keyword research, a brief and a page grade - from real searches in one market.\n\nInput: 'emergency dentist', US. Output: 90 real searches, a brief, and a 54/100 grade for the live page.\n\n13 autocomplete lookups (13 answered), 11 phrasings about other countries dropped, grouped into 45 questions / 17 local / 14 buying / 14 learning.\nWords to use: dental, open, tomorrow - not 'nyc' for a page about Williamsville.\n#ContentMarketing #SEO"
+ },
+ {
+  "id": "content-studio-overview",
+  "project": "Content Studio",
+  "title": "From one seed to a graded page",
+  "input": "emergency dentist · us",
+  "output": "90 searches · brief · 54/100 grade",
+  "post": "Keyword research, a brief and a page grade - from real searches in one market.\n\nInput: 'emergency dentist', US. Output: 90 real searches, a brief, and a 54/100 grade for the live page.\n\n13 autocomplete lookups (13 answered), 11 phrasings about other countries dropped, grouped into 45 questions / 17 local / 14 buying / 14 learning.\nWords to use: dental, open, tomorrow - not 'nyc' for a page about Williamsville.\n#ContentMarketing #SEO"
+ },
+ {
+  "id": "lead-finder-architecture",
+  "project": "Lead Finder",
+  "title": "From a map to an honest first message",
+  "input": "dentist · Manchester · gb",
+  "output": "49 leads · 13 audited · drafts",
+  "post": "Lead generation without lying to the lead.\n\nInput: dentist, Manchester, UK. Output: 49 ranked leads and honest first messages.\n\nOpenStreetMap (1 request/second) → 49 businesses, 13 with a website → each site checked once → ranked by what they stand to gain.\nA chain branch is matched to its brand's site instead of being told 'you have no website'. A site that didn't answer is never quoted.\nDrafts quote only what the check found.\n#LeadGeneration #Sales"
+ },
+ {
+  "id": "lead-finder-overview",
+  "project": "Lead Finder",
+  "title": "From a map to an honest first message",
+  "input": "dentist · Manchester · gb",
+  "output": "49 leads · 13 audited · drafts",
+  "post": "Lead generation without lying to the lead.\n\nInput: dentist, Manchester, UK. Output: 49 ranked leads and honest first messages.\n\nOpenStreetMap (1 request/second) → 49 businesses, 13 with a website → each site checked once → ranked by what they stand to gain.\nA chain branch is matched to its brand's site instead of being told 'you have no website'. A site that didn't answer is never quoted.\nDrafts quote only what the check found.\n#LeadGeneration #Sales"
+ },
+ {
+  "id": "local-seo-architecture",
+  "project": "Site Audit · Local SEO",
+  "title": "Local SEO for the right market",
+  "input": "pizzeriabianco.com · Phoenix · us",
+  "output": "56/100 · 1 fail · 8 warn · 3 pass",
+  "post": "Local SEO, checked for the market the business is actually in.\n\nInput: pizzeriabianco.com (Phoenix). Output: 56/100.\n\nThe country comes from the address, phone code or domain - so a US restaurant is not told to add a WhatsApp link.\nPhone numbers read whole from the page: three of them, and no LocalBusiness data to carry any.\n12 checks: 1 fail (schema), 8 warnings, 3 pass. A Facebook page is not counted as a review link.\n#LocalSEO"
+ },
+ {
+  "id": "local-seo-overview",
+  "project": "Site Audit · Local SEO",
+  "title": "Local SEO for the right market",
+  "input": "pizzeriabianco.com · Phoenix · us",
+  "output": "56/100 · 1 fail · 8 warn · 3 pass",
+  "post": "Local SEO, checked for the market the business is actually in.\n\nInput: pizzeriabianco.com (Phoenix). Output: 56/100.\n\nThe country comes from the address, phone code or domain - so a US restaurant is not told to add a WhatsApp link.\nPhone numbers read whole from the page: three of them, and no LocalBusiness data to carry any.\n12 checks: 1 fail (schema), 8 warnings, 3 pass. A Facebook page is not counted as a review link.\n#LocalSEO"
+ },
+ {
+  "id": "question-builder-architecture",
+  "project": "AI Visibility · Question Builder",
+  "title": "The questions customers ask",
+  "input": "dentist · Williamsville, NY · us",
+  "output": "8 questions · 23 real phrasings",
+  "post": "Before you ask 'does ChatGPT recommend my business?', you need the questions real customers ask.\n\nInput: dentist, Williamsville NY, US. Output: 8 standard questions + 23 real search phrasings.\n\nAutocomplete in the right market only; phrasings about other places and about the job ('how much dentist make a year') are dropped.\n#AISearch"
+ },
+ {
+  "id": "question-builder-overview",
+  "project": "AI Visibility · Question Builder",
+  "title": "The questions customers ask",
+  "input": "dentist · Williamsville, NY · us",
+  "output": "8 questions · 23 real phrasings",
+  "post": "Before you ask 'does ChatGPT recommend my business?', you need the questions real customers ask.\n\nInput: dentist, Williamsville NY, US. Output: 8 standard questions + 23 real search phrasings.\n\nAutocomplete in the right market only; phrasings about other places and about the job ('how much dentist make a year') are dropped.\n#AISearch"
+ },
+ {
+  "id": "rankloom-architecture",
+  "project": "The whole product",
+  "title": "Rankloom, end to end",
+  "input": "any of 18 sub-tools",
+  "output": "a typed result view, saved to the dashboard",
+  "post": "Rankloom: seven tools in one private web app - Site Audit, AI Visibility, Lead Finder, Search Performance, Content Studio, Client Reports and Job Radar.\n\nPython standard library only: http.server, sqlite3, scrypt, RFC 6238 2-step codes. Every outbound request goes through an address guard (public IPs, ports 80/443, pinned sockets).\n18 sub-tools share one output contract, so one renderer draws them all. 173 tests.\n#Python #WebSecurity #SEO"
+ },
+ {
+  "id": "search-performance-architecture",
+  "project": "Search Performance",
+  "title": "Search Console, as a work list",
+  "input": "amherst-gsc-compare.zip",
+  "output": "7 near page one · −45 clicks explained",
+  "post": "Search Console data, turned into a work list with the clicks at stake.\n\nInput: a Search Console export (28 days vs previous). Output: 7 near-page-one queries, 3 under-clicked, the losers and gainers.\n\nOne total everywhere (1,287 clicks, from the Pages table). 'dentist williamsville ny' at position 4.2 gets 2.5% CTR where 8% is typical: ~132 clicks a period to win. Clicks 1,332 → 1,287, mostly that query slipping from 2.8 to 4.2.\n#SEO #GoogleSearchConsole"
+ },
+ {
+  "id": "search-performance-overview",
+  "project": "Search Performance",
+  "title": "Search Console, as a work list",
+  "input": "amherst-gsc-compare.zip",
+  "output": "7 near page one · −45 clicks explained",
+  "post": "Search Console data, turned into a work list with the clicks at stake.\n\nInput: a Search Console export (28 days vs previous). Output: 7 near-page-one queries, 3 under-clicked, the losers and gainers.\n\nOne total everywhere (1,287 clicks, from the Pages table). 'dentist williamsville ny' at position 4.2 gets 2.5% CTR where 8% is typical: ~132 clicks a period to win. Clicks 1,332 → 1,287, mostly that query slipping from 2.8 to 4.2.\n#SEO #GoogleSearchConsole"
+ },
+ {
+  "id": "site-audit-architecture",
+  "project": "Site Audit · Page Check",
+  "title": "Page Check, layer by layer",
+  "input": "amherstdental.com",
+  "output": "91/100 · 18 pass · 2 warn · 1 fail",
+  "post": "What happens inside a one-page SEO audit, from address to score.\n\nInput: amherstdental.com. Output: 91/100 - 18 checks pass, 2 warn, 1 fails.\n\n1. The server checks the session and the request's origin.\n2. An address guard allows public addresses on ports 80/443 only, re-checking every redirect.\n3. One fetch (3 MB cap, 15 s): it answered in 3,349 ms.\n4. The parser reads the title, headings, JSON-LD and 1,697 words of text.\n5. 21 checks run; pass earns full weight, a warning half.\n6. The failure comes first - with the note that speed was measured from our server, not the visitor's.\n\nPart of Rankloom, a private workspace for selling SEO and AI-visibility work.\n#SEO #WebPerformance #Python"
+ },
+ {
+  "id": "site-audit-overview",
+  "project": "Site Audit · Page Check",
+  "title": "Inside a one-page SEO audit",
+  "input": "amherstdental.com",
+  "output": "91/100 · 18 pass · 2 warn · 1 fail",
+  "post": "What happens inside a one-page SEO audit, from address to score.\n\nInput: amherstdental.com. Output: 91/100 - 18 checks pass, 2 warn, 1 fails.\n\n1. The server checks the session and the request's origin.\n2. An address guard allows public addresses on ports 80/443 only, re-checking every redirect.\n3. One fetch (3 MB cap, 15 s): it answered in 3,349 ms.\n4. The parser reads the title, headings, JSON-LD and 1,697 words of text.\n5. 21 checks run; pass earns full weight, a warning half.\n6. The failure comes first - with the note that speed was measured from our server, not the visitor's.\n\nPart of Rankloom, a private workspace for selling SEO and AI-visibility work.\n#SEO #WebPerformance #Python"
+ },
+ {
+  "id": "site-crawl-architecture",
+  "project": "Site Audit · Site Crawl",
+  "title": "A crawl, page by page",
+  "input": "amherstdental.com · 10 pages",
+  "output": "84/100 · 7 long titles · 1 page without description",
+  "post": "A site crawl that tells the truth about what it found.\n\nInput: amherstdental.com, limit 10 pages. Output: 84/100.\n\nrobots.txt first (obeyed), the sitemap listed 166 pages, 10 read in 12.6 s through the same address guard as a single-page check.\nFindings across pages: 7 of 10 titles over 60 characters (longest 129), 1 page with no description, 1 page over 2.5 s.\nEvery finding names its pages - and a check that finds a problem never says Pass.\n#SEO #TechnicalSEO"
+ },
+ {
+  "id": "site-crawl-overview",
+  "project": "Site Audit · Site Crawl",
+  "title": "A crawl, page by page",
+  "input": "amherstdental.com · 10 pages",
+  "output": "84/100 · 7 long titles · 1 page without description",
+  "post": "A site crawl that tells the truth about what it found.\n\nInput: amherstdental.com, limit 10 pages. Output: 84/100.\n\nrobots.txt first (obeyed), the sitemap listed 166 pages, 10 read in 12.6 s through the same address guard as a single-page check.\nFindings across pages: 7 of 10 titles over 60 characters (longest 129), 1 page with no description, 1 page over 2.5 s.\nEvery finding names its pages - and a check that finds a problem never says Pass.\n#SEO #TechnicalSEO"
+ }
+]

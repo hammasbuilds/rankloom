@@ -919,3 +919,18 @@ def test_no_padlock_is_only_said_when_the_secure_site_does_not_work():
     assert leads.HTTPS_NO_REDIRECT in works and leads.PLAIN["https"] not in works
     broken = leads.quick_audit("http://brooklyn.example/", fetcher(False))["problems"]
     assert leads.PLAIN["https"] in broken
+
+
+def test_a_seed_naming_its_town_keeps_other_towns_and_fillers_out():
+    from rankloom.engines import ai_visibility, content, market
+
+    city = content.seed_city("emergency dentist williamsville ny")
+    assert city == "williamsville ny"
+    assert market.foreign("emergency dentist nyc", "us", city)
+    assert not market.foreign("emergency dentist open tomorrow", "us", city)
+    assert "there" in content.STOP
+    assert content.intent("emergency dentist louisville ky") == "Local"
+    for q in ("how much dentist make a year", "how much dentist make per hour"):
+        assert ai_visibility._NOT_A_CUSTOMER.search(q), q
+    for q in ("how much does a dentist cost", "make an appointment with a dentist"):
+        assert not ai_visibility._NOT_A_CUSTOMER.search(q), q

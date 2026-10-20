@@ -322,6 +322,8 @@ def template_questions(niche: str, city: str, brand: str = "") -> list[str]:
 _NOT_A_CUSTOMER = re.compile(
     r"\b(?:salary|salaries|earn|earns|earning|earnings|jobs?|career|careers|vacanc(?:y|ies)|"
     r"hiring|courses?|degree|internships?)\b"
+    # "how much dentist make a year" asks about the dentist's pay, not the patient's bill.
+    r"|\bhow much (?:do |does |can )?(?:an? )?[a-z ]{0,30}\b(?:make|makes|get paid|paid)\b"
 )
 
 

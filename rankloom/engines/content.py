@@ -79,6 +79,7 @@ STOP = set(
     # Filler and the sites people name in searches: true phrasings, but nothing to write about.
     + "much many number contact list online new today get one per after work full olx daraz "
     "amazon reddit youtube quora wikipedia facebook instagram tiktok".split()
+    + "there here that this it its any some will".split()
 )
 MODIFIERS = [
     "best",
@@ -97,6 +98,23 @@ MODIFIERS = [
 MODIFIERS_PK = ["price in pakistan", "in lahore", "in karachi", "kya hai", "kaise"]
 
 
+# A US state written after a town ("louisville ky", "fort collins colorado") names a place the
+# place table does not list; such a search is local all the same.
+_STATE_TAIL = re.compile(
+    r"\b(?:al|ak|az|ar|ca|co|ct|de|fl|ga|hi|id|il|in|ia|ks|ky|la|me|md|ma|mi|mn|ms|mo|mt|ne|nv|"
+    r"nh|nj|nm|ny|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|vt|va|wa|wv|wi|wy|dc|ohio|texas|florida|"
+    r"california|colorado|georgia|arizona|utah|virginia|kentucky|oregon)$")
+
+
+def seed_city(seed: str) -> str:
+    """The town a seed names by its state ("emergency dentist williamsville ny" ->
+    "williamsville ny"), so searches about other towns of the same country are left out."""
+    words = seed.lower().split()
+    if len(words) >= 3 and _STATE_TAIL.search(" ".join(words[-2:])):
+        return " ".join(words[-2:])
+    return ""
+
+
 def intent(phrase: str) -> str:
     p = f" {phrase.lower()} "
     first = phrase.lower().split(" ")[0] if phrase else ""
@@ -104,7 +122,8 @@ def intent(phrase: str) -> str:
         return "Questions"
     if any(f" {w} " in p for w in COMMERCIAL):
         return "Comparing and buying"
-    if any(w in p for w in LOCAL) or market.names_a_place(phrase):
+    if any(w in p for w in LOCAL) or market.names_a_place(phrase) or _STATE_TAIL.search(
+            phrase.lower().strip()):
         return "Local"
     return "Learning"
 
@@ -144,6 +163,7 @@ def expand(
 ) -> dict:
     seed = " ".join(seed.split())
     country = market.code(country)
+    city = city or seed_city(seed)
     if not seed:
         raise InputProblem("Enter a topic, e.g. rooftop solar.")
     lookups = [seed] + [

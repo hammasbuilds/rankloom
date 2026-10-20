@@ -1,0 +1,483 @@
+"""The real server on a real socket, driven the way the browser drives it."""
+
+import http.client
+import json
+import re
+import threading
+
+import pytest
+
+from rankloom import engines, github, security, server
+
+GOOD_PW = "tall-orange-river-42"
+
+
+class Client:
+    def __init__(self, port):
+        self.port = port
+        self.cookie = None
+
+    def call(self, method, path, body=None, headers=None, csrf=True):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        h = {"Host": f"127.0.0.1:{self.port}"}
+        if csrf:
+            h["X-Rankloom"] = "1"
+        if self.cookie:
+            h["Cookie"] = f"{server.COOKIE}={self.cookie}"
+        data = None
+        if body is not None:
+            data = json.dumps(body).encode()
+            h["Content-Type"] = "application/json"
+        h.update(headers or {})
+        conn.request(method, path, body=data, headers=h)
+        resp = conn.getresponse()
+        raw = resp.read()
+        for k, v in resp.getheaders():
+            if k.lower() == "set-cookie" and v.startswith(server.COOKIE + "="):
+                value = v.split(";")[0].split("=", 1)[1]
+                self.cookie = value or None
+        conn.close()
+        try:
+            payload = json.loads(raw) if raw else {}
+        except ValueError:
+            payload = raw.decode(errors="replace")
+        return resp.status, payload, dict(resp.getheaders())
+
+    def get(self, path, **kw):
+        return self.call("GET", path, **kw)
+
+    def post(self, path, body=None, **kw):
+        return self.call("POST", path, body if body is not None else {}, **kw)
+
+
+@pytest.fixture
+def app(tmp_path, monkeypatch):
+    monkeypatch.setenv("RANKLOOM_QUIET", "1")
+    monkeypatch.delenv("RANKLOOM_SMTP_HOST", raising=False)
+    monkeypatch.delenv("RANKLOOM_GITHUB_CLIENT_ID", raising=False)
+    a = server.App(tmp_path, "https://rankloom.test")
+    srv = server.make_server(a, "127.0.0.1", 0)
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    a.port = srv.server_address[1]
+    yield a
+    srv.shutdown()
+    srv.server_close()
+
+
+def new_client(app):
+    return Client(app.port)
+
+
+def register(app, email="ayesha@example.com", name="Ayesha Khan"):
+    c = new_client(app)
+    st, body, _ = c.post("/api/auth/register", {"name": name, "email": email, "password": GOOD_PW})
+    assert st == 201, body
+    return c
+
+
+# --- accounts ------------------------------------------------------------------------------
+
+
+def test_register_signs_in_and_me_reports_the_user(app):
+    c = register(app)
+    st, body, _ = c.get("/api/me")
+    assert st == 200
+    assert body["user"]["email"] == "ayesha@example.com"
+    assert body["user"]["two_factor"] is False
+
+
+def test_session_cookie_is_httponly_and_lax_and_only_its_hash_is_stored(app):
+    c = new_client(app)
+    _, _, headers = c.post(
+        "/api/auth/register", {"name": "A", "email": "a@example.com", "password": GOOD_PW}
+    )
+    cookie = headers["Set-Cookie"]
+    assert "HttpOnly" in cookie and "SameSite=Lax" in cookie
+    stored = [r["token_hash"] for r in app.db.all("SELECT token_hash FROM sessions")]
+    assert c.cookie not in stored
+    assert security.token_hash(c.cookie) in stored
+
+
+def test_duplicate_email_and_weak_password_are_refused_with_the_field(app):
+    register(app)
+    c = new_client(app)
+    st, body, _ = c.post(
+        "/api/auth/register", {"name": "B", "email": "AYESHA@example.com", "password": GOOD_PW}
+    )
+    assert st == 409 and body["field"] == "email"
+    st, body, _ = c.post(
+        "/api/auth/register", {"name": "B", "email": "b@example.com", "password": "short"}
+    )
+    assert st == 400 and body["field"] == "password"
+
+
+def test_login_with_a_wrong_password_and_an_unknown_email_read_the_same(app):
+    register(app)
+    c = new_client(app)
+    st1, b1, _ = c.post(
+        "/api/auth/login", {"email": "ayesha@example.com", "password": "nope-nope-nope"}
+    )
+    st2, b2, _ = c.post(
+        "/api/auth/login", {"email": "nobody@example.com", "password": "nope-nope-nope"}
+    )
+    assert st1 == st2 == 401
+    assert b1["error"] == b2["error"]
+
+
+def test_state_changes_need_the_custom_header_and_a_matching_origin(app):
+    c = register(app)
+    st, _, _ = c.post("/api/account/profile", {"name": "X"}, csrf=False)
+    assert st == 403
+    st, _, _ = c.post(
+        "/api/account/profile", {"name": "X"}, headers={"Origin": "https://evil.example"}
+    )
+    assert st == 403
+    st, _, _ = c.post(
+        "/api/account/profile",
+        {"name": "Ayesha K"},
+        headers={"Origin": f"http://127.0.0.1:{app.port}"},
+    )
+    assert st == 200
+
+
+def test_login_is_rate_limited_per_account(app):
+    register(app)
+    c = new_client(app)
+    codes = [
+        c.post("/api/auth/login", {"email": "ayesha@example.com", "password": "wrong-wrong-1"})[0]
+        for _ in range(9)
+    ]
+    assert codes[:8] == [401] * 8
+    assert codes[8] == 429
+
+
+def test_logout_ends_the_session(app):
+    c = register(app)
+    token = c.cookie
+    c.post("/api/auth/logout")
+    other = new_client(app)
+    other.cookie = token
+    assert other.get("/api/me")[0] == 401
+
+
+def test_change_password_ends_other_sessions_but_keeps_this_one(app):
+    a = register(app)
+    b = new_client(app)
+    assert b.post("/api/auth/login", {"email": "ayesha@example.com", "password": GOOD_PW})[0] == 200
+    st, body, _ = a.post(
+        "/api/account/password", {"current": GOOD_PW, "new": "new-green-forest-77"}
+    )
+    assert st == 200 and body["other_sessions_ended"] == 1
+    assert a.get("/api/me")[0] == 200
+    assert b.get("/api/me")[0] == 401
+    st, body, _ = a.post("/api/account/password", {"current": "wrong", "new": "x" * 12})
+    assert st == 400 and body["field"] == "current"
+
+
+def test_sessions_list_and_revoke_one(app):
+    a = register(app)
+    b = new_client(app)
+    b.post("/api/auth/login", {"email": "ayesha@example.com", "password": GOOD_PW})
+    _, body, _ = a.get("/api/account/sessions")
+    assert len(body["sessions"]) == 2
+    other = next(s for s in body["sessions"] if not s["current"])
+    a.post("/api/account/sessions/revoke", {"id": other["id"]})
+    assert b.get("/api/me")[0] == 401
+    assert a.get("/api/me")[0] == 200
+
+
+# --- password reset ------------------------------------------------------------------------
+
+
+def reset_link(app):
+    body = app.db.one("SELECT body FROM outbox ORDER BY id DESC LIMIT 1")["body"]
+    return re.search(r"https://rankloom\.test/reset\?token=(\S+)", body).group(1)
+
+
+def test_reset_flow_uses_the_configured_base_url_and_works_once(app):
+    a = register(app)
+    c = new_client(app)
+    st, body, _ = c.post(
+        "/api/auth/forgot", {"email": "ayesha@example.com"}, headers={"Host": "attacker.example"}
+    )
+    assert st == 200 and body["delivery"] == "outbox"
+    token = reset_link(app)  # built from the configured URL, not the forged Host
+    st, _, _ = c.post("/api/auth/reset", {"token": token, "password": "brand-new-lake-31"})
+    assert st == 200
+    assert a.get("/api/me")[0] == 401  # every session ended
+    st, _, _ = c.post("/api/auth/reset", {"token": token, "password": "another-new-one-9"})
+    assert st == 400
+    assert (
+        c.post("/api/auth/login", {"email": "ayesha@example.com", "password": "brand-new-lake-31"})[
+            0
+        ]
+        == 200
+    )
+
+
+def test_forgot_answers_the_same_for_unknown_emails(app):
+    c = new_client(app)
+    st, body, _ = c.post("/api/auth/forgot", {"email": "ghost@example.com"})
+    assert st == 200 and body["ok"]
+    assert app.db.one("SELECT COUNT(*) FROM outbox")[0] == 0
+
+
+# --- 2-step verification -------------------------------------------------------------------
+
+
+def enable_two_step(c):
+    _, setup, _ = c.post("/api/2fa/setup")
+    code = security.hotp(setup["secret"], security.totp_step())
+    st, body, _ = c.post("/api/2fa/enable", {"code": code})
+    assert st == 200, body
+    return setup["secret"], body["recovery_codes"]
+
+
+def test_two_step_setup_then_login_needs_a_code(app):
+    c = register(app)
+    secret, codes = enable_two_step(c)
+    assert len(codes) == 10
+    assert c.get("/api/me")[1]["user"]["two_factor"] is True
+
+    d = new_client(app)
+    st, body, _ = d.post("/api/auth/login", {"email": "ayesha@example.com", "password": GOOD_PW})
+    assert st == 200 and body["mfa_required"] is True
+    assert d.get("/api/me")[1] == {"user": None, "mfa_required": True}
+    assert d.get("/api/tools")[0] == 401  # a half-signed-in session reaches nothing
+    pending = d.cookie
+    st, _, _ = d.post("/api/auth/2fa", {"code": security.hotp(secret, security.totp_step() + 1)})
+    assert st == 200
+    assert d.cookie != pending  # promoted by a new token, not by flipping a flag
+    assert d.get("/api/tools")[0] == 200
+
+
+def test_a_code_used_once_cannot_sign_in_again(app):
+    c = register(app)
+    secret, _ = enable_two_step(c)
+    code = security.hotp(secret, security.totp_step() + 1)
+    d = new_client(app)
+    d.post("/api/auth/login", {"email": "ayesha@example.com", "password": GOOD_PW})
+    assert d.post("/api/auth/2fa", {"code": code})[0] == 200
+    e = new_client(app)
+    e.post("/api/auth/login", {"email": "ayesha@example.com", "password": GOOD_PW})
+    assert e.post("/api/auth/2fa", {"code": code})[0] == 401
+
+
+def test_a_recovery_code_works_exactly_once(app):
+    c = register(app)
+    _, codes = enable_two_step(c)
+    for expected in (200, 401):
+        d = new_client(app)
+        d.post("/api/auth/login", {"email": "ayesha@example.com", "password": GOOD_PW})
+        assert d.post("/api/auth/2fa", {"code": codes[0].upper()})[0] == expected
+    st, body, _ = c.get("/api/2fa")
+    assert body["recovery_left"] == 9
+
+
+def test_two_step_codes_are_rate_limited(app):
+    c = register(app)
+    enable_two_step(c)
+    d = new_client(app)
+    d.post("/api/auth/login", {"email": "ayesha@example.com", "password": GOOD_PW})
+    statuses = [d.post("/api/auth/2fa", {"code": "000000"})[0] for _ in range(7)]
+    assert statuses[-1] == 429
+
+
+def test_turning_two_step_off_needs_password_and_code(app):
+    c = register(app)
+    secret, _ = enable_two_step(c)
+    code = security.hotp(secret, security.totp_step() + 1)
+    assert c.post("/api/2fa/disable", {"password": "wrong", "code": code})[0] == 400
+    assert c.post("/api/2fa/disable", {"password": GOOD_PW, "code": code})[0] == 200
+    assert c.get("/api/2fa")[1]["enabled"] is False
+
+
+def test_the_totp_secret_is_sealed_in_the_database(app):
+    c = register(app)
+    secret, _ = enable_two_step(c)
+    blob = app.db.one("SELECT totp_secret FROM users")["totp_secret"]
+    assert secret.encode() not in blob
+    assert app.box.open(blob) == secret
+
+
+# --- tools, runs, analytics ----------------------------------------------------------------
+
+
+def test_catalog_has_nine_tools_each_with_an_about(app):
+    c = register(app)
+    _, body, _ = c.get("/api/tools")
+    tools = body["tools"]
+    assert len(tools) == 9
+    assert len({t["slug"] for t in tools}) == 9
+    for t in tools:
+        assert t["about"] and t["does"] and t["input"] and t["output"] and t["fields"]
+    live = {t["slug"] for t in tools if t["status"] == "live"}
+    assert live == set(engines.ENGINES)
+
+
+def test_a_tool_without_an_engine_says_so_and_records_no_run(app):
+    c = register(app)
+    st, body, _ = c.post("/api/tools/lead-finder/run", {"fields": {"trade": "x", "city": "y"}})
+    assert st == 409 and "being built" in body["error"]
+    assert app.db.one("SELECT COUNT(*) FROM runs")[0] == 0
+
+
+def test_runs_feed_the_tool_dashboard_and_the_overview(app, monkeypatch):
+    calls = []
+
+    def fake(fields):
+        calls.append(fields)
+        return f"{fields['url']} scored 70/100", 70, {"score": 70}
+
+    monkeypatch.setitem(engines.ENGINES, "site-audit", fake)
+    monkeypatch.setitem(server.ENGINES, "site-audit", fake)
+    c = register(app)
+    c.post("/api/events", {"tool": "site-audit", "kind": "open"})
+    c.post("/api/events", {"tool": "site-audit", "kind": "open"})  # within 30 s: one visit
+    for _ in range(2):
+        st, body, _ = c.post(
+            "/api/tools/site-audit/run", {"fields": {"url": "example.com", "evil": "dropped"}}
+        )
+        assert st == 200 and body["score"] == 70
+    assert calls[0] == {"url": "example.com"}  # unknown fields never reach the engine
+    _, stats, _ = c.get("/api/tools/site-audit/stats")
+    assert stats["opens"] == 1 and stats["runs"] == 2 and stats["ok"] == 2
+    assert stats["avg_score"] == 70
+    assert len(stats["daily"]) == 14 and stats["daily"][-1]["runs"] == 2
+    _, dash, _ = c.get("/api/dashboard")
+    row = next(t for t in dash["tools"] if t["slug"] == "site-audit")
+    assert row["runs"] == 2 and row["opens"] == 1
+    assert len(dash["recent"]) == 2
+
+
+def test_a_refused_address_is_a_recorded_failed_run_not_a_crash(app):
+    c = register(app)
+    st, body, _ = c.post("/api/tools/site-audit/run", {"fields": {"url": "http://127.0.0.1/"}})
+    assert st == 422 and body["status"] == "error"
+    _, stats, _ = c.get("/api/tools/site-audit/stats")
+    assert stats["errors"] == 1
+
+
+def test_one_user_cannot_read_another_users_run(app, monkeypatch):
+    monkeypatch.setitem(server.ENGINES, "site-audit", lambda f: ("ok", 50, {"score": 50}))
+    a = register(app)
+    _, run, _ = a.post("/api/tools/site-audit/run", {"fields": {"url": "example.com"}})
+    b = register(app, email="bilal@example.com", name="Bilal")
+    assert b.get(f"/api/runs/{run['id']}")[0] == 404
+    assert a.get(f"/api/runs/{run['id']}")[0] == 200
+
+
+# --- GitHub --------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def fake_github(monkeypatch):
+    seen = []
+
+    def request(method, url, headers, body=None):
+        seen.append((method, url, headers.get("Authorization")))
+        if url.endswith("/user"):
+            return 200, b'{"login": "hammasbuilds"}'
+        if "/user/repos" in url:
+            return 200, json.dumps(
+                [
+                    {
+                        "full_name": "hammasbuilds/rankloom",
+                        "private": True,
+                        "description": "growth tools",
+                        "language": "Python",
+                        "stargazers_count": 3,
+                    }
+                ]
+            ).encode()
+        if url.endswith("/repos/hammasbuilds/rankloom"):
+            return (
+                200,
+                b'{"full_name": "hammasbuilds/rankloom", "default_branch": "main", "private": true}',
+            )
+        if url.endswith("/languages"):
+            return 200, b'{"Python": 9000, "JavaScript": 4000}'
+        if "/git/trees/" in url:
+            return 200, b'{"tree": [{"type": "blob"}, {"type": "blob"}, {"type": "tree"}]}'
+        return 404, b'{"message": "Not Found"}'
+
+    monkeypatch.setattr(github, "request", request)
+    return seen
+
+
+TOKEN = "ghp_" + "a" * 36
+
+
+def test_connect_with_a_token_list_and_import(app, fake_github):
+    c = register(app)
+    st, body, _ = c.post("/api/github/token", {"token": TOKEN})
+    assert st == 200 and body["login"] == "hammasbuilds"
+    blob = app.db.one("SELECT github_token FROM users")["github_token"]
+    assert TOKEN.encode() not in blob
+    assert c.get("/api/github")[1] == {"oauth": False, "connected": True, "login": "hammasbuilds"}
+    _, repos, _ = c.get("/api/github/repos")
+    assert repos["repos"][0]["full_name"] == "hammasbuilds/rankloom"
+    st, body, _ = c.post("/api/github/import", {"repo": "hammasbuilds/rankloom"})
+    assert st == 200 and body["import"]["file_count"] == 2
+    _, imports, _ = c.get("/api/imports")
+    assert imports["imports"][0]["languages"] == {"Python": 9000, "JavaScript": 4000}
+    assert all(auth == f"Bearer {TOKEN}" for _, _, auth in fake_github if auth)
+
+
+def test_github_token_never_reaches_the_browser(app, fake_github):
+    c = register(app)
+    c.post("/api/github/token", {"token": TOKEN})
+    for path in ("/api/me", "/api/github", "/api/github/repos", "/api/imports"):
+        assert TOKEN not in json.dumps(c.get(path)[1])
+
+
+def test_repo_names_are_validated_before_any_request(app, fake_github):
+    c = register(app)
+    c.post("/api/github/token", {"token": TOKEN})
+    before = len(fake_github)
+    for bad in ("../../user", "a/b/c", "owner/", "x y/z"):
+        assert c.post("/api/github/import", {"repo": bad})[0] == 400
+    assert len(fake_github) == before
+
+
+def test_oauth_start_is_refused_without_an_app_and_state_is_checked(app, monkeypatch):
+    c = register(app)
+    assert c.post("/api/github/start")[0] == 409
+    monkeypatch.setenv("RANKLOOM_GITHUB_CLIENT_ID", "cid")
+    monkeypatch.setenv("RANKLOOM_GITHUB_CLIENT_SECRET", "csecret")
+    st, body, _ = c.post("/api/github/start")
+    assert st == 200
+    assert "redirect_uri=https%3A%2F%2Frankloom.test%2Fauth%2Fgithub%2Fcallback" in body["url"]
+    st, _, headers = c.get("/auth/github/callback?code=x&state=forged")
+    assert st == 303 and "github=state" in headers["Location"]
+
+
+# --- pages ---------------------------------------------------------------------------------
+
+
+def test_pages_ship_a_strict_csp_and_deep_links_get_the_app(app):
+    c = new_client(app)
+    for path in ("/", "/login", "/t/site-audit", "/settings"):
+        st, body, headers = c.get(path, csrf=False)
+        assert st == 200 and '<div id="app"' in body
+        assert "script-src 'self'" in headers["Content-Security-Policy"]
+        assert headers["X-Frame-Options"] == "DENY"
+
+
+def test_static_paths_cannot_climb_out_of_the_static_folder(app):
+    c = new_client(app)
+    st, body, _ = c.get("/static/../rankloom/db.py", csrf=False)
+    assert "CREATE TABLE" not in body
+    st, body, _ = c.get("/static/..%2frankloom%2fdb.py", csrf=False)
+    assert "CREATE TABLE" not in body
+
+
+def test_every_html_page_script_and_style_exists(app):
+    c = new_client(app)
+    _, html, _ = c.get("/", csrf=False)
+    refs = re.findall(r'(?:src|href)="(/static/[^"]+)"', html)
+    assert len(refs) >= 4
+    for ref in refs:
+        st, body, headers = c.get(ref, csrf=False)
+        assert st == 200 and '<div id="app"' not in str(body), ref

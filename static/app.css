@@ -121,6 +121,7 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 .nav-label { font-size: 11px; font-weight: 640; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); padding: 14px 10px 6px; }
 .nav { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
 .nav li { position: relative; }
+.nav .row { position: relative; }
 .nav a.item {
   display: flex; align-items: center; gap: 10px;
   padding: 7px 34px 7px 10px; border-radius: 7px;
@@ -134,7 +135,7 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
   width: 26px; height: 26px; border-radius: 6px; border: 0; background: transparent;
   color: var(--text-3); display: grid; place-items: center; cursor: pointer; opacity: 0;
 }
-.nav li:hover .pop, .nav .pop:focus-visible { opacity: 1; }
+.nav .row:hover .pop, .nav .pop:focus-visible { opacity: 1; }
 .nav .pop:hover { background: var(--border); color: var(--text); }
 .nav .pop svg { width: 14px; height: 14px; }
 .sidebar-foot { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 2px; }
@@ -337,6 +338,55 @@ details.as-table summary { cursor: pointer; color: var(--text-3); font-size: 12.
 .spinner { width: 16px; height: 16px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; display: inline-block; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* ---------- sub-tools ---------- */
+.subnav { list-style: none; margin: 2px 0 6px; padding: 0 0 0 18px; display: none; flex-direction: column; gap: 1px; border-left: 1px solid var(--border); margin-left: 17px; }
+li.tool.open > .subnav { display: flex; }
+.nav a.item.sub { padding: 5px 34px 5px 12px; font-size: 13.5px; font-weight: 500; }
+li.tool.open > .row > a.item:not([aria-current]) { color: var(--text); font-weight: 600; }
+.crumb { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--text-3); margin-bottom: 4px; }
+.crumb svg { width: 14px; height: 14px; }
+.subgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+.subgrid .card + .card { margin-top: 0; }
+.subcard h2 a { color: var(--text); }
+.subcard p { margin-top: 6px; }
+.sub-links { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; }
+
+/* ---------- result blocks ---------- */
+ul.plain { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.prose p { max-width: 76ch; color: var(--text); white-space: pre-wrap; }
+.prose p + p { margin-top: 12px; }
+.drafts { display: grid; gap: 14px; }
+.draft { background: var(--surface-2); border-radius: 8px; padding: 12px 14px; }
+.draft-text { white-space: pre-wrap; font: inherit; margin: 8px 0 0; color: var(--text); }
+textarea {
+  width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border-strong);
+  background: var(--surface); color: var(--text); font: inherit; resize: vertical; min-height: 96px;
+}
+textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+input[type=file] { font: inherit; color: var(--text-2); }
+.toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+.toolbar input[type=search] { flex: 1; min-width: 200px; }
+.toolbar select { width: auto; }
+.toolbar .head-actions { margin-left: auto; }
+.small-text { font-size: 12.5px; }
+.nowrap { white-space: nowrap; }
+.nowrap .btn + .btn { margin-left: 4px; }
+.table.leads select, .table.leads input { height: 32px; font-size: 13px; }
+.table.leads select { min-width: 118px; }
+.table.leads input { min-width: 150px; }
+.table.leads td:first-child { min-width: 150px; }
+.table.leads td { vertical-align: top; }
+.report-actions { margin-bottom: 12px; }
+
+/* ---------- print: a report is the whole page ---------- */
+@media print {
+  .sidebar, .topbar, .tabs, .page-head, form, .report-actions, .as-table, .head-actions, #toast, .scrim, [role=tabpanel] > .card:first-child { display: none !important; }
+  .shell { display: block; }
+  body, .card, .tile { background: #fff !important; color: #000 !important; }
+  .card { border-color: #ccc; break-inside: avoid; }
+  .page { padding: 0; max-width: none; }
+}
 
 /* ---------- small screens ---------- */
 @media (max-width: 900px) {

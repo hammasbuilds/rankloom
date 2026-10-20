@@ -1,263 +1,521 @@
-"""The nine tools: what each one does, what it takes, what it gives back, and whether it runs yet.
+"""The six tools and their sub-tools: what each does, what it takes, what it gives back.
 
-The sidebar, each tool's About panel and the run form are all rendered from this list, so a
-tool's description lives in one place. `status` is "live" only when an engine exists and is
-tested; every other tool says plainly that its engine is being built, rather than returning
-something that looks like a result.
+The sidebar, every About panel and every run form are rendered from this list, so a description
+lives in one place. A sub-tool marked `needs_ai` runs only when an AI engine is configured
+(see ai.py); the catalogue reports that per request instead of pretending it always runs.
 """
 
 from __future__ import annotations
+
+from . import ai
+
+
+def F(
+    name,
+    label,
+    type="text",
+    placeholder="",
+    required=False,
+    hint="",
+    options=None,  # noqa: A002, N802
+    accept="",
+):
+    f = {
+        "name": name,
+        "label": label,
+        "type": type,
+        "placeholder": placeholder,
+        "required": required,
+    }
+    if hint:
+        f["hint"] = hint
+    if options:
+        f["options"] = options
+    if accept:
+        f["accept"] = accept
+    return f
+
 
 TOOLS: list[dict] = [
     {
         "slug": "site-audit",
         "name": "Site Audit",
-        "tagline": "Find out what stops a page from ranking, and how to fix each thing.",
+        "tagline": "Find what stops a site from ranking, and how to fix each thing.",
         "about": (
-            "Fetches a page the way a search crawler does and checks the things that decide "
-            "whether it can be found at all: the title and description, the heading outline, "
-            "canonical and robots rules, mobile viewport, image alt text, structured data, "
-            "social preview tags, HTTPS, compression, robots.txt and the sitemap. Every check "
-            "comes back as pass, warning or fail with the exact fix, and the page gets a score "
-            "out of 100 so a re-run after the fixes shows the difference."
+            "Reads a site the way a search crawler does and lists what is wrong, worst first, "
+            "with the exact fix for each problem. Use it as the free audit that opens a "
+            "conversation with a prospect, and as the paid audit-and-fix job."
         ),
-        "does": [
-            "Fetches the page and follows its redirects",
-            "Runs 21 on-page and technical checks",
-            "Explains the fix for every warning and failure",
-            "Scores the page out of 100 and keeps the history",
-        ],
-        "input": "A page address, e.g. example.com or https://example.com/pricing",
-        "output": "A score, each check with pass / warning / fail, and the fix for each",
-        "status": "live",
-        "fields": [
+        "subtools": [
             {
-                "name": "url",
-                "label": "Page address",
-                "type": "url",
-                "placeholder": "example.com",
-                "required": True,
-            }
+                "slug": "page",
+                "name": "Page Audit",
+                "tagline": "21 checks on one page, scored out of 100.",
+                "about": (
+                    "Fetches one page and checks the things that decide whether it can be "
+                    "found: title and description, heading outline, canonical and robots rules, "
+                    "mobile viewport, image alt text, structured data, social preview tags, "
+                    "HTTPS, speed, compression, robots.txt and the sitemap."
+                ),
+                "does": [
+                    "Runs 21 on-page and technical checks",
+                    "Explains the fix for each",
+                    "Scores the page and keeps the history",
+                ],
+                "input": "A page address",
+                "output": "A score and every check with its fix",
+                "fields": [F("url", "Page address", "url", "example.com", True)],
+            },
+            {
+                "slug": "crawl",
+                "name": "Site Crawl",
+                "tagline": "Follow the site's own links and find problems across every page.",
+                "about": (
+                    "Starts at the home page and the sitemap, follows the site's own links, and "
+                    "reports broken pages, duplicate titles and descriptions, missing H1s, "
+                    "noindex pages, thin and slow pages - with every page it read listed."
+                ),
+                "does": [
+                    "Reads up to 50 pages of a site",
+                    "Finds broken pages and who links to them",
+                    "Finds duplicates and thin pages across the site",
+                ],
+                "input": "The site's address and how many pages to read",
+                "output": "Site-wide checks, broken pages and a per-page table",
+                "fields": [
+                    F("url", "Site address", "url", "example.com", True),
+                    F(
+                        "pages",
+                        "Pages to read",
+                        "select",
+                        options=[
+                            {"value": "25", "label": "25 pages"},
+                            {"value": "10", "label": "10 pages (quick)"},
+                            {"value": "50", "label": "50 pages"},
+                        ],
+                    ),
+                ],
+            },
+            {
+                "slug": "local",
+                "name": "Local SEO Check",
+                "tagline": "Is the business ready for maps and 'near me' searches?",
+                "about": (
+                    "Checks what local search and maps need from a business's page: "
+                    "LocalBusiness data with name, address and phone; the same phone on the "
+                    "page and in the data; click-to-call; a map; a link to the Google Business "
+                    "Profile; reviews; opening hours; WhatsApp; and the city in the title."
+                ),
+                "does": [
+                    "Checks LocalBusiness data and NAP consistency",
+                    "Checks call, map, review and WhatsApp links",
+                    "Checks the city is in the title and heading",
+                ],
+                "input": "The business page and its city",
+                "output": "A local score and every check with its fix",
+                "fields": [
+                    F("url", "Business page", "url", "smilecare.pk", True),
+                    F("city", "City", placeholder="Lahore"),
+                ],
+            },
         ],
     },
     {
         "slug": "ai-visibility",
         "name": "AI Visibility",
-        "tagline": "See whether AI answer engines mention your business when customers ask.",
+        "tagline": "Get named when customers ask ChatGPT-style assistants.",
         "about": (
-            "Customers now ask an assistant instead of a search box. This tool asks the "
-            "questions your customers ask - 'best dentist in Lahore', 'cheapest CRM for "
-            "clinics' - and records whether your brand appears in the answer, which competitors "
-            "appear instead, and which pages are cited. It then lists what to change on your "
-            "site so the next answer is more likely to include you."
+            "Customers now ask an assistant instead of a search box. This tool checks whether "
+            "AI answer engines can read a site, builds the questions customers really ask, and "
+            "records whether the business is named in the answers - and who is named instead."
         ),
-        "does": [
-            "Builds the questions a customer would ask in your niche",
-            "Records who is mentioned and which pages are cited",
-            "Compares your share of mentions with competitors",
-            "Suggests content and structured-data changes",
-        ],
-        "input": "Your brand, your website and the niche or city you serve",
-        "output": "Mention rate, competitors named, cited pages and a fix list",
-        "status": "building",
-        "fields": [
-            {"name": "brand", "label": "Brand name", "type": "text", "placeholder": "Acme Dental"},
-            {"name": "site", "label": "Website", "type": "url", "placeholder": "acmedental.pk"},
+        "subtools": [
             {
-                "name": "niche",
-                "label": "Niche and city",
-                "type": "text",
-                "placeholder": "dentist, Lahore",
+                "slug": "readiness",
+                "name": "AI Readiness",
+                "tagline": "Can AI crawlers read, understand and quote the site?",
+                "about": (
+                    "Reads robots.txt for 13 AI and search crawlers (ChatGPT, Perplexity, "
+                    "Claude, Google, Bing and the training crawlers), checks the text arrives "
+                    "in the HTML rather than by script, that the business is described as an "
+                    "entity, that questions are answered directly, and that nothing stops "
+                    "answers quoting the page."
+                ),
+                "does": [
+                    "Checks 13 AI crawlers against robots.txt",
+                    "Checks the page can be read without JavaScript",
+                    "Checks entity data, FAQs and llms.txt",
+                ],
+                "input": "A page address",
+                "output": "A readiness score, checks and crawler access",
+                "fields": [F("url", "Page address", "url", "example.com", True)],
             },
-        ],
-    },
-    {
-        "slug": "keyword-radar",
-        "name": "Keyword Radar",
-        "tagline": "Turn one seed topic into the searches worth writing for.",
-        "about": (
-            "Expands a seed topic into the questions and phrases people really search for, "
-            "groups them by intent (learning, comparing, buying, local), and ranks the groups "
-            "by how much a small site can win. Includes Urdu and Roman Urdu phrasings for "
-            "Pakistani audiences, which most keyword tools miss entirely."
-        ),
-        "does": [
-            "Expands a seed into hundreds of real search phrasings",
-            "Groups them by intent and by topic",
-            "Adds Urdu and Roman Urdu variants",
-            "Ranks groups by opportunity for a small site",
-        ],
-        "input": "A seed topic and a target country",
-        "output": "Keyword groups with intent, variants and an opportunity rank",
-        "status": "building",
-        "fields": [
-            {"name": "seed", "label": "Seed topic", "type": "text", "placeholder": "home solar"},
-            {"name": "country", "label": "Country", "type": "text", "placeholder": "Pakistan"},
-        ],
-    },
-    {
-        "slug": "trend-watch",
-        "name": "Trend Watch",
-        "tagline": "Spot what your audience is starting to talk about before it peaks.",
-        "about": (
-            "Watches public trend sources - search interest, Reddit, YouTube and news - for a "
-            "set of topics, and flags terms whose interest is rising faster than their usual "
-            "range. Each rising term comes with the posts and pages driving it, so you can "
-            "decide whether to write about it this week."
-        ),
-        "does": [
-            "Tracks interest over time for your topics",
-            "Flags terms rising faster than their normal range",
-            "Shows the posts and pages behind each rise",
-            "Sends a weekly digest of what moved",
-        ],
-        "input": "Up to ten topics and a region",
-        "output": "Rising terms with their trend line and the sources driving them",
-        "status": "building",
-        "fields": [
             {
-                "name": "topics",
-                "label": "Topics (comma separated)",
-                "type": "text",
-                "placeholder": "ai tools, freelancing, solar",
+                "slug": "questions",
+                "name": "Question Builder",
+                "tagline": "The questions that decide whether you get recommended.",
+                "about": (
+                    "Builds the questions a customer would ask an assistant about your kind of "
+                    "business, and adds the real phrasings people type into search for it."
+                ),
+                "does": [
+                    "Writes the standard recommendation questions",
+                    "Adds real search phrasings from autocomplete",
+                ],
+                "input": "The service, the city and the brand",
+                "output": "Questions to test in Answer Check",
+                "fields": [
+                    F("niche", "Service or product", placeholder="dentist", required=True),
+                    F("city", "City", placeholder="Lahore"),
+                    F("brand", "Brand", placeholder="Smile Care Clinic"),
+                ],
             },
-            {"name": "region", "label": "Region", "type": "text", "placeholder": "PK"},
+            {
+                "slug": "answers",
+                "name": "Answer Check",
+                "tagline": "Ask the AI engine and see who it names.",
+                "needs_ai": True,
+                "about": (
+                    "Asks the AI engine configured on this server each question, records "
+                    "whether your brand or website is named, which businesses are named "
+                    "instead, and your mention rate. Configure a web-grounded service to "
+                    "measure what customers see in those assistants."
+                ),
+                "does": [
+                    "Asks up to 8 questions",
+                    "Records whether you are named",
+                    "Ranks the businesses named instead",
+                ],
+                "input": "Brand, website and niche, or your own questions",
+                "output": "Mention rate, each answer and the competitors named",
+                "fields": [
+                    F("brand", "Brand", placeholder="Smile Care Clinic", required=True),
+                    F("site", "Website", "url", "smilecare.pk"),
+                    F("niche", "Service or product", placeholder="dentist"),
+                    F("city", "City", placeholder="Lahore"),
+                    F(
+                        "questions",
+                        "Questions (one per line, optional)",
+                        "textarea",
+                        hint="Leave empty to use the standard questions.",
+                    ),
+                ],
+            },
         ],
     },
     {
         "slug": "lead-finder",
         "name": "Lead Finder",
-        "tagline": "Find local businesses whose websites are losing them customers.",
+        "tagline": "Find businesses that need your help, and the first message to send.",
         "about": (
-            "Searches public business listings for a trade in a city, quickly audits each "
-            "business's website, and ranks them by how much a fix would help them: no "
-            "website, a slow site, no mobile layout, missing from maps. You get a short, "
-            "checked list of businesses worth contacting and the specific problem to mention."
+            "Finds businesses of a trade in a city, checks each website, and ranks them by how "
+            "much your help would change for them. Every lead is kept in one list with its "
+            "status, and each gets a first message that quotes its own problems."
         ),
-        "does": [
-            "Lists businesses for a trade and a city from public listings",
-            "Runs a quick audit on each website",
-            "Ranks them by how much a fix would help",
-            "Exports the list with the problem found for each",
-        ],
-        "input": "A trade and a city, e.g. 'dental clinic, Karachi'",
-        "output": "Ranked businesses with website, problem found and contact page",
-        "status": "building",
-        "fields": [
-            {"name": "trade", "label": "Trade", "type": "text", "placeholder": "dental clinic"},
-            {"name": "city", "label": "City", "type": "text", "placeholder": "Karachi"},
+        "subtools": [
+            {
+                "slug": "search",
+                "name": "Business Search",
+                "tagline": "A trade and a city in, ranked leads out.",
+                "about": (
+                    "Searches OpenStreetMap for businesses of a trade in a city, quickly "
+                    "audits each website, and ranks them: no website first, then the weakest "
+                    "sites. Every result is saved to Lead List."
+                ),
+                "does": [
+                    "Finds up to 50 businesses",
+                    "Quick-audits each website",
+                    "Ranks by opportunity and saves them",
+                ],
+                "input": "A trade and a city",
+                "output": "Ranked leads with the problem found",
+                "fields": [
+                    F(
+                        "trade",
+                        "Trade",
+                        placeholder="dentists",
+                        required=True,
+                        hint="Plural works best: dentists, restaurants, schools.",
+                    ),
+                    F("city", "City", placeholder="Lahore", required=True),
+                    F(
+                        "country",
+                        "Country code",
+                        placeholder="pk",
+                        hint="Two letters (pk, gb, us, ae) so a city name means one place.",
+                    ),
+                ],
+            },
+            {
+                "slug": "list",
+                "name": "Lead List",
+                "kind": "page",
+                "tagline": "Every lead, its status and your notes.",
+                "about": (
+                    "All saved leads in one place: mark each as new, contacted, replied, won "
+                    "or lost, keep notes, import a CSV from anywhere and export the list."
+                ),
+                "does": [
+                    "Tracks status and notes",
+                    "Imports and exports CSV",
+                    "Opens a message draft for any lead",
+                ],
+                "input": "Leads from Business Search or a CSV",
+                "output": "A pipeline you can filter and export",
+                "fields": [],
+            },
+            {
+                "slug": "outreach",
+                "name": "Outreach Drafts",
+                "tagline": "A first message that quotes their own problems.",
+                "about": (
+                    "Checks the business's website and writes an email, a short LinkedIn or "
+                    "Instagram message and a WhatsApp message, each naming what was found in "
+                    "words an owner understands. Drafts only - you review and send them "
+                    "yourself, one at a time."
+                ),
+                "does": [
+                    "Re-checks the website",
+                    "Writes three message formats",
+                    "Never sends anything",
+                ],
+                "input": "A lead, or a business name and website",
+                "output": "Three drafts ready to edit",
+                "fields": [
+                    F("lead", "Lead", "hidden"),
+                    F("business", "Business", placeholder="Smile Care Clinic"),
+                    F("site", "Their website", "url", "smilecare.pk"),
+                    F("sender", "Your name", placeholder="Ayesha, Rankloom"),
+                    F("offer", "What you offer", placeholder="a free full audit"),
+                ],
+            },
         ],
     },
     {
-        "slug": "outreach-writer",
-        "name": "Outreach Writer",
-        "tagline": "Write a first message that quotes the prospect's own problem.",
+        "slug": "search-performance",
+        "name": "Search Performance",
+        "tagline": "Real Google numbers: what brings clicks and what is being missed.",
         "about": (
-            "Takes one lead and its audit and writes a short, personal first message - email or "
-            "LinkedIn - that names the specific problem found on their site and what fixing it "
-            "would do. It writes drafts for you to review and send yourself; it never sends in "
-            "bulk, because bulk messages get accounts and domains blocked."
+            "Reads a site's own Google Search Console report - real clicks, impressions and "
+            "positions, free - and shows where the traffic comes from, where clicks are being "
+            "left on the table, and what changed between two periods."
         ),
-        "does": [
-            "Drafts a personal message from a lead's audit",
-            "Writes email, LinkedIn and WhatsApp versions",
-            "Keeps every draft for you to edit and send",
-            "Tracks which drafts you sent and who replied",
-        ],
-        "input": "A lead from Lead Finder, or a business name and website",
-        "output": "Message drafts in three formats, ready to edit",
-        "status": "building",
-        "fields": [
+        "subtools": [
             {
-                "name": "business",
-                "label": "Business",
-                "type": "text",
-                "placeholder": "Smile Care Clinic",
+                "slug": "import",
+                "name": "Import Report",
+                "tagline": "Upload a Search Console export.",
+                "about": (
+                    "In Search Console open Performance, choose Export, then Download CSV, and "
+                    "upload the zip (or Queries.csv and Pages.csv). Choose Date > Compare "
+                    "first to unlock Changes."
+                ),
+                "does": [
+                    "Reads the zip or the CSV files",
+                    "Totals clicks, impressions, CTR and position",
+                    "Lists top queries and pages",
+                ],
+                "input": "A Search Console export",
+                "output": "Totals and top queries and pages",
+                "fields": [
+                    F("site", "Site name", placeholder="smilecare.pk", required=True),
+                    F("files", "Export file(s)", "file", accept=".zip,.csv", required=True),
+                ],
             },
             {
-                "name": "site",
-                "label": "Their website",
-                "type": "url",
-                "placeholder": "smilecare.pk",
+                "slug": "opportunities",
+                "name": "Opportunities",
+                "tagline": "Queries close to page one, and titles nobody clicks.",
+                "about": (
+                    "Finds queries ranking 8-20 that a better page could lift onto page one, "
+                    "queries clicked far less than their position should earn (rewrite the "
+                    "title), and queries seen often but never clicked."
+                ),
+                "does": [
+                    "Finds striking-distance queries",
+                    "Estimates clicks a better title would win",
+                    "Lists seen-but-never-clicked searches",
+                ],
+                "input": "An imported report",
+                "output": "Three ranked lists of opportunities",
+                "fields": [F("dataset", "Report", "dataset", required=True)],
+            },
+            {
+                "slug": "changes",
+                "name": "Changes",
+                "tagline": "Which pages and queries gained or lost clicks.",
+                "about": (
+                    "Compares the two periods of a comparison export: total clicks before and "
+                    "after, the pages and queries that lost the most, and those that gained."
+                ),
+                "does": [
+                    "Compares two periods",
+                    "Ranks the biggest losers and winners",
+                    "Shows position moves",
+                ],
+                "input": "An imported comparison report",
+                "output": "Losers and winners",
+                "fields": [F("dataset", "Report", "dataset", required=True)],
             },
         ],
     },
     {
         "slug": "content-studio",
         "name": "Content Studio",
-        "tagline": "Go from a keyword group to a publishable article brief and draft.",
+        "tagline": "From what people search to a page that answers it.",
         "about": (
-            "Turns a keyword group into a content brief - the questions to answer, the "
-            "headings, the facts to check, the internal links to add - and then a first draft "
-            "written to be cited by AI answer engines as well as ranked by search. Every "
-            "factual claim in a draft is marked so it can be checked before publishing."
+            "Finds what people actually type about a topic, turns it into a brief, drafts the "
+            "page with every checkable claim marked, and grades any page or text against the "
+            "keyword it should rank for. This is the monthly retainer work."
         ),
-        "does": [
-            "Builds a brief from a keyword group",
-            "Writes a structured first draft",
-            "Marks every factual claim for checking",
-            "Suggests internal links and structured data",
-        ],
-        "input": "A keyword group or a topic, plus your site",
-        "output": "A brief, a draft and a list of claims to verify",
-        "status": "building",
-        "fields": [
+        "subtools": [
             {
-                "name": "topic",
-                "label": "Topic or keyword",
-                "type": "text",
-                "placeholder": "how much does rooftop solar cost in Lahore",
+                "slug": "keywords",
+                "name": "Keyword Ideas",
+                "tagline": "Real search phrasings, grouped by what the searcher wants.",
+                "about": (
+                    "Expands a topic through search-box autocomplete - including Pakistani "
+                    "and Roman Urdu phrasings - and groups the results into questions, "
+                    "comparing and buying, local, and learning. Autocomplete shows what people "
+                    "type, not how often; no free source gives real volumes."
+                ),
+                "does": [
+                    "Runs 20-50 autocomplete lookups",
+                    "Groups phrases by intent",
+                    "Finds the words that keep recurring",
+                ],
+                "input": "A topic",
+                "output": "Grouped real search phrasings",
+                "fields": [
+                    F("seed", "Topic", placeholder="rooftop solar", required=True),
+                    F(
+                        "country",
+                        "Country code",
+                        placeholder="pk",
+                        hint="Two letters, e.g. pk, ae, gb, us.",
+                    ),
+                    F(
+                        "depth",
+                        "Depth",
+                        "select",
+                        options=[
+                            {"value": "normal", "label": "Normal (about 25 lookups)"},
+                            {"value": "deep", "label": "Deep (about 50 lookups)"},
+                        ],
+                    ),
+                ],
+            },
+            {
+                "slug": "brief",
+                "name": "Content Brief",
+                "tagline": "Title, outline, questions and words for one page.",
+                "about": (
+                    "Builds a brief from real searches: the search title and description, an "
+                    "outline whose headings are the questions people ask, the words to use, "
+                    "a length target and a pre-publishing checklist."
+                ),
+                "does": [
+                    "Writes the title and description",
+                    "Builds the outline from real questions",
+                    "Lists the words to include",
+                ],
+                "input": "A topic",
+                "output": "A brief a writer can follow",
+                "fields": [
+                    F("topic", "Topic", placeholder="solar panel price in lahore", required=True)
+                ],
+            },
+            {
+                "slug": "draft",
+                "name": "Draft Writer",
+                "tagline": "A first draft with every claim marked for checking.",
+                "needs_ai": True,
+                "about": (
+                    "Writes a first draft from the brief with the AI engine configured on this "
+                    "server, then lists every sentence holding a number, price, date or "
+                    "superlative so nothing is published unchecked."
+                ),
+                "does": [
+                    "Follows the brief's outline",
+                    "Avoids invented statistics",
+                    "Lists claims to verify",
+                ],
+                "input": "A topic and the business publishing it",
+                "output": "A draft and its claims to check",
+                "fields": [
+                    F("topic", "Topic", placeholder="solar panel price in lahore", required=True),
+                    F("business", "Published by", placeholder="Sun Power Lahore"),
+                ],
+            },
+            {
+                "slug": "grade",
+                "name": "Content Grader",
+                "tagline": "Score a page or text against its keyword.",
+                "about": (
+                    "Grades a live page or pasted text for one keyword: in the title, H1 and "
+                    "opening; used naturally; long enough; broken into sections; readable; and "
+                    "covering the words searchers use around it."
+                ),
+                "does": [
+                    "Checks keyword placement",
+                    "Checks length, sections and readability",
+                    "Checks coverage of related searches",
+                ],
+                "input": "A keyword and a page address or text",
+                "output": "A content score with fixes",
+                "fields": [
+                    F("keyword", "Keyword", placeholder="rooftop solar lahore", required=True),
+                    F("url", "Page address", "url", "example.com/solar"),
+                    F("text", "Or paste the text", "textarea"),
+                ],
             },
         ],
     },
     {
-        "slug": "social-planner",
-        "name": "Social Planner",
-        "tagline": "Plan a month of posts for X, LinkedIn and Instagram from your content.",
+        "slug": "client-reports",
+        "name": "Client Reports",
+        "tagline": "Monthly reports that show clients what they are paying for.",
         "about": (
-            "Breaks an article, a product update or a trend into a calendar of posts sized for "
-            "each network, with the best posting times for your audience. Posts are scheduled "
-            "on your own connected accounts and nothing is posted without your approval."
+            "Keeps your clients in one list and turns fresh checks of each client's site, "
+            "their Search Console numbers and the work you did into one monthly report, ready "
+            "to print or save as PDF."
         ),
-        "does": [
-            "Splits one piece of content into many posts",
-            "Sizes each post for X, LinkedIn and Instagram",
-            "Lays them out on a calendar",
-            "Waits for your approval before anything goes out",
-        ],
-        "input": "An article, a link or a short product update",
-        "output": "A post calendar with a draft per network",
-        "status": "building",
-        "fields": [
+        "subtools": [
             {
-                "name": "source",
-                "label": "Article link or update",
-                "type": "text",
-                "placeholder": "https://example.com/blog/launch",
+                "slug": "clients",
+                "name": "Clients",
+                "kind": "page",
+                "tagline": "Who you work for, their site and their report settings.",
+                "about": "Add each client with their website, city, niche, contact and the "
+                "Search Console report to use in their monthly report.",
+                "does": [
+                    "Stores each client's details",
+                    "Links a Search Console report",
+                    "Opens the monthly report in one click",
+                ],
+                "input": "Client details",
+                "output": "Your client list",
+                "fields": [],
             },
-        ],
-    },
-    {
-        "slug": "launch-kit",
-        "name": "Launch Kit",
-        "tagline": "Promote a GitHub project: README fixes, launch posts and where to share.",
-        "about": (
-            "Imports one of your GitHub repositories, reads its README and code, and prepares "
-            "its launch: a sharper README opening, a description and topics that help it be "
-            "found, launch posts for X, LinkedIn, Reddit and Hacker News, and a list of the "
-            "communities where this kind of project is welcome."
-        ),
-        "does": [
-            "Imports a repository from your connected GitHub",
-            "Suggests a sharper README opening and topics",
-            "Writes launch posts for each community",
-            "Lists where this kind of project is welcome",
-        ],
-        "input": "An imported GitHub repository",
-        "output": "README suggestions, launch posts and a sharing plan",
-        "status": "building",
-        "fields": [
-            {"name": "repo", "label": "Repository", "type": "repo", "placeholder": "owner/name"},
+            {
+                "slug": "report",
+                "name": "Monthly Report",
+                "tagline": "One printable page per client per month.",
+                "about": (
+                    "Runs a fresh Page Audit, Local SEO Check and AI Readiness on the client's "
+                    "site, compares each score with the last time, adds their Search Console "
+                    "numbers and every piece of work recorded for the site this month, and "
+                    "lists what to fix next."
+                ),
+                "does": [
+                    "Re-checks the site and shows the change",
+                    "Adds Google search numbers",
+                    "Lists the month's work and next fixes",
+                ],
+                "input": "A client",
+                "output": "A printable monthly report",
+                "fields": [F("client", "Client", "client", required=True)],
+            },
         ],
     },
 ]
@@ -265,5 +523,23 @@ TOOLS: list[dict] = [
 BY_SLUG = {t["slug"]: t for t in TOOLS}
 
 
+def find(tool: str, sub: str) -> tuple[dict, dict] | None:
+    t = BY_SLUG.get(tool)
+    if not t:
+        return None
+    s = next((x for x in t["subtools"] if x["slug"] == sub), None)
+    return (t, s) if s else None
+
+
+def status(sub: dict) -> str:
+    if sub.get("needs_ai") and ai.engine() is None:
+        return "needs-ai"
+    return "live"
+
+
 def public_catalog() -> list[dict]:
-    return [dict(t) for t in TOOLS]
+    out = []
+    for t in TOOLS:
+        subs = [{**s, "kind": s.get("kind", "run"), "status": status(s)} for s in t["subtools"]]
+        out.append({**t, "subtools": subs})
+    return out

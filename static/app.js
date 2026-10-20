@@ -4,7 +4,7 @@
   "use strict";
 
   const root = document.getElementById("app");
-  const state = { user: null, tools: [], bySlug: {}, shell: null };
+  const state = { user: null, tools: [], bySlug: {}, ai: false, shell: null };
   const channel = "BroadcastChannel" in window ? new BroadcastChannel("rankloom") : null;
 
   // ---------------------------------------------------------------- DOM helpers
@@ -49,7 +49,6 @@
     external: "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3",
     logout: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9",
     moon: "M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z",
-    sun: "M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42",
     check: "M20 6L9 17l-5-5",
     alert: "M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01",
     x: "M18 6L6 18M6 6l12 12",
@@ -57,17 +56,18 @@
     menu: "M3 12h18M3 6h18M3 18h18",
     git: "M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9",
     shield: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
-    play: "M5 3l14 9-14 9V3z",
     download: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3",
+    upload: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12",
+    copy: "M20 9h-9a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2zM5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1",
+    print: "M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6z",
+    chevron: "M9 18l6-6-6-6",
+    trash: "M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2",
     "site-audit": "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.35-4.35",
     "ai-visibility": "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z",
-    "keyword-radar": "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 18a6 6 0 1 0 0-12 6 6 0 0 0 0 12zM12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4z",
-    "trend-watch": "M23 6l-9.5 9.5-5-5L1 18M17 6h6v6",
     "lead-finder": "M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 0 1 18 0zM12 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
-    "outreach-writer": "M22 2L11 13M22 2l-7 20-4-9-9-4z",
+    "search-performance": "M23 6l-9.5 9.5-5-5L1 18M17 6h6v6",
     "content-studio": "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M16 13H8M16 17H8M10 9H8",
-    "social-planner": "M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM16 2v4M8 2v4M3 10h18",
-    "launch-kit": "M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09zM12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2zM9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5",
+    "client-reports": "M3 3v18h18M7 15l4-4 3 3 5-6",
   };
   function icon(name) {
     return s("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "2",
@@ -100,13 +100,20 @@
     return new Date(ts * 1000).toLocaleDateString();
   }
   function fmtDay(iso) {
-    const d = new Date(iso + "T00:00:00");
-    return d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    return new Date(iso + "T00:00:00").toLocaleDateString(undefined, { day: "numeric", month: "short" });
   }
   function initials(name) {
     return (name || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join("");
   }
   function save(key, val) { try { localStorage.setItem(key, val); } catch (e) { /* ignore */ } }
+  function safeHref(u) { return /^https?:\/\//i.test(String(u || "")) ? String(u) : null; }
+  function copyText(text) {
+    if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => toast("Copied"), () => toast("Could not copy"));
+  }
+  function download(name, text, type = "text/plain") {
+    const a = h("a", { href: URL.createObjectURL(new Blob([text], { type })), download: name });
+    document.body.append(a); a.click(); a.remove();
+  }
 
   async function api(method, path, body) {
     const opts = { method, credentials: "same-origin", headers: { "X-Rankloom": "1" } };
@@ -127,21 +134,50 @@
     return data;
   }
 
+  function readFile(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).split(",")[1] || "");
+      r.onerror = () => reject(new Error(`Could not read ${file.name}`));
+      r.readAsDataURL(file);
+    });
+  }
+
   // A form wired to an endpoint: disables while sending, puts field errors under the field.
-  function form({ fields, submit, onSubmit, extra, submitClass = "primary block" }) {
+  // Field types: text, url, email, password, textarea, select, hidden, file, dataset, client.
+  function form({ fields, submit, onSubmit, extra, submitClass = "primary block", values = {} }) {
     const el = h("form", { novalidate: true });
     const errs = {};
     const inputs = {};
     for (const f of fields) {
       const id = `f-${f.name}-${Math.random().toString(36).slice(2, 7)}`;
-      const input = h("input", { id, name: f.name, type: f.type || "text", placeholder: f.placeholder || "",
-        autocomplete: f.autocomplete || "off", required: f.required, value: f.value, readonly: f.readonly,
-        inputmode: f.inputmode, maxlength: f.maxlength, class: f.class, spellcheck: "false" });
+      const preset = values[f.name] ?? f.value;
+      let input;
+      if (f.type === "hidden") {
+        input = h("input", { type: "hidden", name: f.name, value: preset || "" });
+        inputs[f.name] = input; el.append(input); continue;
+      }
+      if (f.type === "textarea") {
+        input = h("textarea", { id, name: f.name, rows: 5, placeholder: f.placeholder || "", spellcheck: "false" });
+        if (preset) input.value = preset;
+      } else if (f.type === "select" || f.type === "dataset" || f.type === "client") {
+        input = h("select", { id, name: f.name });
+        for (const o of f.options || []) input.append(h("option", { value: o.value, text: o.label }));
+        if (f.type !== "select") loadOptions(input, f.type, preset);
+        else if (preset) input.value = preset;
+      } else if (f.type === "file") {
+        input = h("input", { id, name: f.name, type: "file", multiple: true, accept: f.accept || null });
+      } else {
+        input = h("input", { id, name: f.name, type: f.type === "url" ? "text" : (f.type || "text"),
+          placeholder: f.placeholder || "", autocomplete: f.autocomplete || "off", value: preset,
+          readonly: f.readonly, inputmode: f.type === "url" ? "url" : f.inputmode, maxlength: f.maxlength,
+          class: f.class, spellcheck: "false" });
+      }
       inputs[f.name] = input;
       errs[f.name] = h("div", { class: "err", hidden: true });
       el.append(h("div", { class: "field" },
-        h("label", { for: id, text: f.label }), input, f.hint ? h("div", { class: "hint", text: f.hint }) : null,
-        errs[f.name]));
+        h("label", { for: id, text: f.label }), input,
+        f.hint ? h("div", { class: "hint", text: f.hint }) : null, errs[f.name]));
     }
     const general = h("div", { class: "notice bad", hidden: true });
     const btn = h("button", { class: `btn ${submitClass}`, type: "submit" }, submit);
@@ -152,12 +188,17 @@
       Object.values(errs).forEach((e) => { e.hidden = true; });
       Object.values(inputs).forEach((i) => i.removeAttribute("aria-invalid"));
       general.hidden = true;
-      const values = Object.fromEntries(Object.entries(inputs).map(([k, i]) => [k, i.value]));
       btn.disabled = true;
-      const label = btn.textContent;
+      const label = [...btn.childNodes];
       clear(btn).append(h("span", { class: "spinner" }), " Working…");
-      try { await onSubmit(values, inputs); }
-      catch (e) {
+      try {
+        const vals = {};
+        for (const [k, i] of Object.entries(inputs)) {
+          if (i.type === "file") vals[k] = await Promise.all([...i.files].map(async (f) => ({ name: f.name, data: await readFile(f) })));
+          else vals[k] = i.value;
+        }
+        await onSubmit(vals, inputs);
+      } catch (e) {
         const field = e.data && e.data.field;
         if (field && errs[field]) {
           errs[field].textContent = e.message; errs[field].hidden = false;
@@ -166,11 +207,25 @@
           clear(general).append(icon("alert"), h("div", { text: e.message })); general.hidden = false;
         }
       } finally {
-        btn.disabled = false; clear(btn).append(label);
+        btn.disabled = false; clear(btn).append(...label);
       }
     });
     el.inputs = inputs;
+    el.general = general;
     return el;
+  }
+
+  async function loadOptions(select, kind, preset) {
+    try {
+      const d = await api("GET", `/api/options/${kind}`);
+      clear(select);
+      if (!d.options.length) {
+        select.append(h("option", { value: "", text: kind === "dataset" ? "No reports imported yet" : "No clients yet" }));
+        return;
+      }
+      for (const o of d.options) select.append(h("option", { value: o.value, text: o.label }));
+      if (preset) select.value = preset;
+    } catch (e) { select.append(h("option", { value: "", text: e.message })); }
   }
 
   // ---------------------------------------------------------------- routing
@@ -198,10 +253,14 @@
     const win = window.open(path, "_blank", `popup=yes,width=${w},height=${hgt}`);
     if (win) win.opener = null; else window.open(path, "_blank");
   }
+  function popBtn(path, label) {
+    return h("button", { class: "pop", type: "button", title: `Open ${label} in a new window`,
+      "aria-label": `Open ${label} in a new window`, onclick: (ev) => { ev.stopPropagation(); popOut(path); } }, icon("external"));
+  }
 
   if (channel) {
     channel.onmessage = (ev) => {
-      if (ev.data === "signed-out") { state.user = null; go("/login", true); }
+      if (ev.data === "signed-out") { state.user = null; state.shell = null; go("/login", true); }
       if (ev.data === "signed-in" && !state.user) render();
     };
   }
@@ -217,6 +276,8 @@
     }
   }
 
+  function subOf(tool, slug) { return tool.subtools.find((x) => x.slug === slug); }
+
   async function render() {
     const path = location.pathname;
     if (path === "/" || path === "") { go(state.user ? "/app" : "/login", true); return; }
@@ -230,46 +291,52 @@
     }
     const me = await loadMe();
     if (me.mfa_required) { go("/verify", true); return; }
-    if (!me.user) { go(`/login?next=${encodeURIComponent(path + location.hash)}`, true); return; }
+    if (!me.user) { go(`/login?next=${encodeURIComponent(path + location.search + location.hash)}`, true); return; }
     if (!state.tools.length) {
       const t = await api("GET", "/api/tools");
-      state.tools = t.tools;
+      state.tools = t.tools; state.ai = t.ai;
       state.bySlug = Object.fromEntries(t.tools.map((x) => [x.slug, x]));
     }
-    const main = shell(path);
-    const m = path.match(/^\/t\/([a-z0-9-]+)$/);
+    const m = path.match(/^\/t\/([a-z0-9-]+)(?:\/([a-z0-9-]+))?$/);
+    const tool = m && state.bySlug[m[1]];
+    const sub = tool && m[2] ? subOf(tool, m[2]) : null;
+    const main = shell(path, tool);
     if (path === "/app") return overview(main);
     if (path === "/settings") return settings(main);
-    if (m && state.bySlug[m[1]]) return toolPage(main, state.bySlug[m[1]]);
+    if (tool && !m[2]) return toolHome(main, tool);
+    if (tool && sub) return subPage(main, tool, sub);
     notFound(main);
   }
 
   // ---------------------------------------------------------------- shell
-  function shell(path) {
+  function shell(path, activeTool) {
     if (!state.shell) {
-      const nav = h("ul", { class: "nav", "aria-label": "Tools" });
+      const nav = h("ul", { class: "nav tools", "aria-label": "Tools" });
       for (const t of state.tools) {
         const href = `/t/${t.slug}`;
-        nav.append(h("li", null,
-          h("a", { class: "item", href, "data-link": true, "data-path": href, title: t.tagline },
-            icon(t.slug), h("span", { text: t.name })),
-          h("button", { class: "pop", type: "button", title: `Open ${t.name} in a new window`,
-            "aria-label": `Open ${t.name} in a new window`, onclick: () => popOut(href) }, icon("external"))));
+        const subs = h("ul", { class: "subnav", "data-tool": t.slug, "aria-label": `${t.name} sub-tools` },
+          t.subtools.map((x) => h("li", null, h("div", { class: "row" },
+            h("a", { class: "item sub", href: `${href}/${x.slug}`, "data-link": true, "data-path": `${href}/${x.slug}`, title: x.tagline },
+              h("span", { text: x.name })),
+            popBtn(`${href}/${x.slug}`, x.name)))));
+        nav.append(h("li", { class: "tool", "data-tool": t.slug },
+          h("div", { class: "row" },
+            h("a", { class: "item", href, "data-link": true, "data-path": href, title: t.tagline },
+              icon(t.slug), h("span", { text: t.name })),
+            popBtn(href, t.name)), subs));
       }
       const top = h("ul", { class: "nav" },
         h("li", null, h("a", { class: "item", href: "/app", "data-link": true, "data-path": "/app" },
           icon("overview"), h("span", { text: "Overview" }))));
-      const themeBtn = h("button", { class: "btn ghost small", type: "button", onclick: toggleTheme },
-        icon("moon"), h("span", { text: "Theme" }));
       const foot = h("div", { class: "sidebar-foot" },
         h("ul", { class: "nav" }, h("li", null, h("a", { class: "item", href: "/settings", "data-link": true,
           "data-path": "/settings" }, icon("settings"), h("span", { text: "Settings" })))),
         h("div", { class: "who" }, h("div", { class: "avatar", text: initials(state.user.name) }),
           h("div", { class: "meta" }, h("div", { text: state.user.name }),
             h("div", { class: "email", text: state.user.email }))),
-        h("div", { class: "foot-actions" }, themeBtn,
-          h("button", { class: "btn ghost small", type: "button", onclick: signOut }, icon("logout"),
-            h("span", { text: "Sign out" }))));
+        h("div", { class: "foot-actions" },
+          h("button", { class: "btn ghost small", type: "button", onclick: toggleTheme }, icon("moon"), h("span", { text: "Theme" })),
+          h("button", { class: "btn ghost small", type: "button", onclick: signOut }, icon("logout"), h("span", { text: "Sign out" }))));
       const sidebar = h("aside", { class: "sidebar", "aria-label": "Main" },
         h("a", { class: "brand", href: "/app", "data-link": true }, logo(), "Rankloom"),
         top, h("div", { class: "nav-label", text: "Tools" }), nav, foot);
@@ -292,29 +359,31 @@
     for (const a of state.shell.wrap.querySelectorAll("a[data-path]")) {
       if (a.dataset.path === path) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
     }
+    for (const li of state.shell.wrap.querySelectorAll("li.tool")) {
+      li.classList.toggle("open", !!activeTool && li.dataset.tool === activeTool.slug);
+    }
     window.scrollTo(0, 0);
     return clear(state.shell.main);
   }
 
   function toggleTheme() {
     const rootEl = document.documentElement;
-    const dark = rootEl.dataset.theme ? rootEl.dataset.theme === "dark"
-      : matchMedia("(prefers-color-scheme: dark)").matches;
+    const dark = rootEl.dataset.theme ? rootEl.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
     rootEl.dataset.theme = dark ? "light" : "dark";
     save("rl-theme", rootEl.dataset.theme);
   }
 
   async function signOut() {
     try { await api("POST", "/api/auth/logout"); } catch (e) { /* signed out either way */ }
-    state.user = null; state.shell = null;
+    state.user = null; state.shell = null; state.tools = [];
     if (channel) channel.postMessage("signed-out");
     go("/login", true);
   }
 
-  function page(main, title, lede, actions) {
+  function page(main, title, lede, actions, crumb) {
     document.title = `${title} · Rankloom`;
     const head = h("div", { class: "page-head" },
-      h("div", null, h("h1", { text: title }), lede ? h("p", { class: "lede", text: lede }) : null),
+      h("div", null, crumb || null, h("h1", { text: title }), lede ? h("p", { class: "lede", text: lede }) : null),
       actions ? h("div", { class: "head-actions" }, actions) : null);
     const body = h("div", { class: "page" }, head);
     main.append(body);
@@ -324,6 +393,23 @@
   function notFound(main) {
     const p = page(main, "Page not found", "That address does not match a page in Rankloom.");
     p.append(h("a", { class: "btn", href: "/app", "data-link": true, text: "Back to overview" }));
+  }
+
+  function tabs(p, list, initial, onSelect) {
+    const bar = h("div", { class: "tabs", role: "tablist" });
+    const panel = h("div", { role: "tabpanel", id: "panel" });
+    p.append(bar, panel);
+    const select = (key, push = true) => {
+      for (const b of bar.children) b.setAttribute("aria-selected", String(b.dataset.key === key));
+      if (push) history.replaceState({}, "", `${location.pathname}${location.search}#${key}`);
+      clear(panel);
+      onSelect(key, panel);
+    };
+    for (const [key, label] of list) {
+      bar.append(h("button", { role: "tab", type: "button", "data-key": key, "aria-controls": "panel", text: label, onclick: () => select(key) }));
+    }
+    const fromHash = location.hash.slice(1);
+    select(list.some(([k]) => k === fromHash) ? fromHash : initial, false);
   }
 
   // ---------------------------------------------------------------- charts
@@ -347,7 +433,6 @@
     return 10 * p;
   }
 
-  // One series of bars over days. `unit` names the value in the tooltip.
   function barChart(points, { unit, alt = false, label }) {
     const box = h("div", { class: "chart-box" });
     const total = points.reduce((a, p) => a + p.value, 0);
@@ -396,11 +481,10 @@
     return box;
   }
 
-  // Scores out of 100 across runs, oldest first.
   function lineChart(points, { label }) {
     const box = h("div", { class: "chart-box" });
     const svg = s("svg", { class: "chart", role: "img", "aria-label": label });
-    box.append(svg, dataTable(points.map((p) => [new Date(p.created_at * 1000).toLocaleString(), p.score]), ["Run", "Score"]));
+    box.append(svg, dataTable(points.map((p) => [new Date(p.created_at * 1000).toLocaleString(), p.name || "", p.score]), ["Run", "Sub-tool", "Score"]));
     const draw = () => {
       const W = svg.clientWidth || 600, H = 180, L = 28, R = 10, B = 14, T = 10;
       clear(svg); svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
@@ -411,13 +495,11 @@
       }
       const xs = (i) => points.length === 1 ? (L + W - R) / 2 : L + 8 + (W - R - L - 16) * (i / (points.length - 1));
       const ys = (v) => T + (H - B - T) * (1 - v / 100);
-      if (points.length > 1) {
-        svg.append(s("polyline", { class: "line", points: points.map((p, i) => `${xs(i)},${ys(p.score)}`).join(" ") }));
-      }
+      if (points.length > 1) svg.append(s("polyline", { class: "line", points: points.map((p, i) => `${xs(i)},${ys(p.score)}`).join(" ") }));
       points.forEach((p, i) => {
         const dot = s("circle", { class: "dot", cx: xs(i), cy: ys(p.score), r: 4.5 });
         const hit = s("circle", { class: "hit", cx: xs(i), cy: ys(p.score), r: 14 });
-        hit.addEventListener("mousemove", (ev) => showTip(ev, [`${p.score} / 100`, new Date(p.created_at * 1000).toLocaleString(), p.summary]));
+        hit.addEventListener("mousemove", (ev) => showTip(ev, [`${p.score} / 100`, p.name || "", new Date(p.created_at * 1000).toLocaleString(), p.summary]));
         hit.addEventListener("mouseleave", hideTip);
         svg.append(dot, hit);
       });
@@ -430,234 +512,442 @@
   function dataTable(rows, head) {
     return h("details", { class: "as-table" }, h("summary", { text: "Show as a table" }),
       h("table", { class: "table" },
-        h("thead", null, h("tr", null, head.map((c, i) => h("th", { class: i ? "num" : null, text: c })))),
-        h("tbody", null, rows.map((r) => h("tr", null, r.map((c, i) => h("td", { class: i ? "num" : null, text: String(c) })))))));
+        h("thead", null, h("tr", null, head.map((c, i) => h("th", { class: i === head.length - 1 ? "num" : null, text: c })))),
+        h("tbody", null, rows.map((r) => h("tr", null, r.map((c, i) => h("td", { class: i === r.length - 1 ? "num" : null, text: String(c) })))))));
   }
 
   function tile(k, v, sub) {
     return h("div", { class: "tile" }, h("div", { class: "k", text: k }), h("div", { class: "v", text: v }),
       sub ? h("div", { class: "s", text: sub }) : null);
   }
-  function statusPill(status) {
-    return status === "live"
+  function subStatus(sub) {
+    if (sub.kind === "page") return h("span", { class: "pill", text: "Workspace" });
+    return sub.status === "live"
       ? h("span", { class: "pill live" }, icon("check"), "Live")
-      : h("span", { class: "pill building" }, icon("settings"), "Being built");
+      : h("span", { class: "pill building" }, icon("info"), "Needs AI engine");
+  }
+  const STATUS = { pass: ["check", "Pass"], warn: ["alert", "Warning"], fail: ["x", "Fail"] };
+  function badge(k, text) { return h("span", { class: `status ${k}` }, icon(STATUS[k][0]), text || STATUS[k][1]); }
+
+  // ---------------------------------------------------------------- result view
+  function scoreRing(score) {
+    const C = 2 * Math.PI * 34;
+    return s("svg", { class: "ring", viewBox: "0 0 84 84", role: "img", "aria-label": `Score ${score} out of 100` },
+      s("circle", { class: "track", cx: 42, cy: 42, r: 34, fill: "none", "stroke-width": 8 }),
+      s("circle", { class: "bar", cx: 42, cy: 42, r: 34, fill: "none", "stroke-width": 8,
+        "stroke-dasharray": C, "stroke-dashoffset": C * (1 - score / 100), transform: "rotate(-90 42 42)" }),
+      s("text", { x: 42, y: 50, "text-anchor": "middle" }, String(score)));
+  }
+
+  function cell(c) {
+    if (c === null || c === undefined) return "";
+    if (typeof c !== "object") return String(c);
+    if (c.status) return badge(c.status, c.text);
+    if (c.route) return h("a", { href: c.route, "data-link": true, text: c.text });
+    const href = safeHref(c.href);
+    return href ? h("a", { href, target: "_blank", rel: "noopener noreferrer", text: c.text }) : String(c.text || "");
+  }
+
+  function block(b) {
+    const head = h("div", { class: "card-head" }, h("h2", { text: b.title }), b.note ? h("p", { text: b.note }) : null);
+    const card = h("div", { class: "card" }, head);
+    if (b.type === "checks") {
+      card.append(h("ul", { class: "checks" }, b.items.map((c) => h("li", null, badge(c.status),
+        h("div", null, h("div", { class: "label", text: c.label }), h("div", { class: "detail", text: c.detail }),
+          c.fix ? h("div", { class: "fix" }, h("b", { text: "Fix: " }), c.fix) : null)))));
+    } else if (b.type === "facts") {
+      card.append(h("div", { class: "facts" }, b.items.map(([k, v]) => h("div", { title: v },
+        h("div", { class: "k", text: k }), h("div", { class: "v", text: v })))));
+    } else if (b.type === "table") {
+      if (!b.rows.length) card.append(h("p", { class: "muted", text: "Nothing here." }));
+      else card.append(h("div", { class: "table-wrap" }, h("table", { class: "table" },
+        h("thead", null, h("tr", null, b.columns.map((c) => h("th", { text: c })))),
+        h("tbody", null, b.rows.map((r) => h("tr", null, r.map((c) => h("td", { class: typeof c === "number" ? "num" : null }, cell(c)))))))));
+    } else if (b.type === "list") {
+      card.append(h("ul", { class: "plain" }, b.items.map((x) => h("li", { text: x }))),
+        h("div", { class: "head-actions mt" }, h("button", { class: "btn small", type: "button", onclick: () => copyText(b.items.join("\n")) }, icon("copy"), "Copy list")));
+    } else if (b.type === "text") {
+      card.append(h("div", { class: "prose" }, b.text.split(/\n{2,}/).map((para) => h("p", { text: para }))),
+        h("div", { class: "head-actions mt" }, h("button", { class: "btn small", type: "button", onclick: () => copyText(b.text) }, icon("copy"), "Copy"),
+          h("button", { class: "btn small", type: "button", onclick: () => download("draft.md", b.text, "text/markdown") }, icon("download"), "Download")));
+    } else if (b.type === "drafts") {
+      card.append(h("div", { class: "drafts" }, b.items.map((d) => h("div", { class: "draft" },
+        h("div", { class: "row-between" }, h("h3", { text: d.label }),
+          h("button", { class: "btn small", type: "button", onclick: () => copyText(d.text) }, icon("copy"), "Copy")),
+        h("pre", { class: "draft-text", text: d.text })))));
+    }
+    return card;
+  }
+
+  function viewResult(output, run) {
+    const v = output.view;
+    const wrap = h("div", { class: "result" });
+    if (!v) { wrap.append(h("pre", { class: "card mono", text: JSON.stringify(output, null, 2) })); return wrap; }
+    const hd = v.headline;
+    const c = hd.counts;
+    wrap.append(h("div", { class: "card" }, h("div", { class: "score" },
+      typeof hd.score === "number" ? scoreRing(hd.score) : null,
+      h("div", { class: "grow" }, h("h2", { text: hd.title }),
+        h("p", { class: "muted", text: [hd.subtitle, run && run.created_at ? `run ${ago(run.created_at)}` : ""].filter(Boolean).join(" · ") }),
+        c ? h("div", { class: "counts" }, badge("fail", `${c.fail} fail`), badge("warn", `${c.warn} warning`), badge("pass", `${c.pass} pass`)) : null))));
+    for (const b of v.blocks) wrap.append(block(b));
+    return wrap;
   }
 
   // ---------------------------------------------------------------- overview
   async function overview(main) {
     const first = (state.user.name || "").split(" ")[0];
-    const p = page(main, `Welcome back, ${first}`, "Every tool in one place. Open any of them here, or in a window of its own to use several side by side.");
+    const p = page(main, `Welcome back, ${first}`, "Six tools, each with its own sub-tools. Open any of them here, or in a window of its own to use several side by side.");
     const body = h("div", { class: "loading", text: "Loading your workspace…" });
     p.append(body);
     let d;
-    try { d = await api("GET", "/api/dashboard"); }
-    catch (e) { clear(body).append(e.message); return; }
-    const live = d.tools.filter((t) => t.status === "live").length;
+    try { d = await api("GET", "/api/dashboard"); } catch (e) { clear(body).append(e.message); return; }
     const runs = d.tools.reduce((a, t) => a + t.runs, 0);
-    const opens = d.tools.reduce((a, t) => a + t.opens, 0);
+    const subs = state.tools.reduce((a, t) => a + t.subtools.length, 0);
     swap(body,
+      d.ai ? null : h("div", { class: "notice" }, icon("info"), h("div", null,
+        h("strong", { text: "Answer Check and Draft Writer need an AI engine. " }),
+        "Everything else runs now. Set one up on the server to switch those two on.")),
       h("div", { class: "grid tiles" },
-        tile("Tools", `${live} of ${d.tools.length}`, "running now"),
+        tile("Tools", `${state.tools.length}`, `${subs} sub-tools`),
         tile("Runs", String(runs), "all time"),
-        tile("Tool visits", String(opens), "all time"),
-        tile("Imported repos", String(d.imports), "from GitHub")),
+        tile("Leads", String(d.leads), "in Lead List"),
+        tile("Clients", String(d.clients), "in Client Reports")),
       h("div", { class: "grid two" },
         h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Runs per day" }), h("p", { text: "Last 14 days, all tools" })),
           barChart(d.daily.map((x) => ({ day: x.day, value: x.runs })), { unit: "runs", label: "Runs per day over the last 14 days" })),
         h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Tool visits per day" }), h("p", { text: "Last 14 days, all tools" })),
           barChart(d.daily.map((x) => ({ day: x.day, value: x.opens })), { unit: "visits", alt: true, label: "Tool visits per day over the last 14 days" }))),
       h("div", { class: "card" },
-        h("div", { class: "card-head" }, h("h2", { text: "Your tools" }), h("p", { text: "Click a name to open it here; the arrow opens a new window" })),
+        h("div", { class: "card-head" }, h("h2", { text: "Your tools" }), h("p", { text: "Click a name to open it here; the button opens a new window" })),
         h("div", { class: "table-wrap" }, h("table", { class: "table" },
-          h("thead", null, h("tr", null, h("th", { text: "Tool" }), h("th", { text: "Status" }), h("th", { class: "num", text: "Visits" }),
+          h("thead", null, h("tr", null, h("th", { text: "Tool" }), h("th", { text: "Sub-tools" }), h("th", { class: "num", text: "Visits" }),
             h("th", { class: "num", text: "Runs" }), h("th", { text: "Last used" }), h("th", null, h("span", { class: "sr-only", text: "Open" })))),
           h("tbody", null, d.tools.map((t) => {
             const meta = state.bySlug[t.slug];
             return h("tr", null,
-              h("td", null, h("a", { href: `/t/${t.slug}`, "data-link": true, text: t.name }),
-                h("div", { class: "muted", text: meta.tagline })),
-              h("td", null, statusPill(t.status)),
+              h("td", null, h("a", { href: `/t/${t.slug}`, "data-link": true, text: t.name }), h("div", { class: "muted", text: meta.tagline })),
+              h("td", null, h("div", { class: "sub-links" }, meta.subtools.map((x) => h("a", { href: `/t/${t.slug}/${x.slug}`, "data-link": true, text: x.name })))),
               h("td", { class: "num", text: String(t.opens) }),
               h("td", { class: "num", text: String(t.runs) }),
               h("td", { class: "muted", text: ago(t.last) }),
               h("td", { class: "num" }, h("button", { class: "btn small ghost", type: "button", title: `Open ${t.name} in a new window`,
                 onclick: () => popOut(`/t/${t.slug}`) }, icon("external"), "New window")));
           }))))),
-      h("div", { class: "card" },
-        h("div", { class: "card-head" }, h("h2", { text: "Recent runs" })),
-        d.recent.length ? h("div", { class: "table-wrap" }, h("table", { class: "table" },
-          h("tbody", null, d.recent.map((r) => h("tr", { class: "click", onclick: () => go(`/t/${r.tool}?run=${r.id}#run`) },
-            h("td", { text: state.bySlug[r.tool] ? state.bySlug[r.tool].name : r.tool }),
-            h("td", { text: r.summary }),
-            h("td", { class: "num", text: r.score === null ? "" : `${r.score}/100` }),
-            h("td", { class: "muted", text: ago(r.created_at) })))))) :
-          h("p", { class: "muted" }, "No runs yet. Start with ",
-            h("a", { href: "/t/site-audit", "data-link": true, text: "Site Audit" }), " - it is live now.")));
+      recentCard(d.recent));
   }
 
-  // ---------------------------------------------------------------- tool page
-  function toolPage(main, tool) {
+  function runLink(r) { return `/t/${r.tool}/${r.subtool}?run=${r.id}#run`; }
+  function subName(tool, slug) { const t = state.bySlug[tool]; const x = t && subOf(t, slug); return x ? x.name : slug; }
+
+  function recentCard(recent) {
+    return h("div", { class: "card" },
+      h("div", { class: "card-head" }, h("h2", { text: "Recent runs" })),
+      recent.length ? h("div", { class: "table-wrap" }, h("table", { class: "table" },
+        h("tbody", null, recent.map((r) => h("tr", { class: "click", onclick: () => go(runLink(r)) },
+          h("td", { text: subName(r.tool, r.subtool) }),
+          h("td", null, r.status === "error" ? badge("fail", "Failed") : null, " ", r.summary),
+          h("td", { class: "num", text: r.score === null ? "" : `${r.score}/100` }),
+          h("td", { class: "muted", text: ago(r.created_at) })))))) :
+        h("p", { class: "muted" }, "No runs yet. Start with ", h("a", { href: "/t/site-audit/page", "data-link": true, text: "Page Audit" }), "."));
+  }
+
+  // ---------------------------------------------------------------- tool home
+  function toolHome(main, tool) {
     api("POST", "/api/events", { tool: tool.slug, kind: "open" }).catch(() => {});
     const p = page(main, tool.name, tool.tagline, [
-      statusPill(tool.status),
-      h("button", { class: "btn small", type: "button", onclick: () => popOut(location.pathname + location.search + location.hash) },
-        icon("external"), "Open in new window"),
-    ]);
-    const tabs = [["run", "Run"], ["dashboard", "Dashboard"], ["about", "About"]];
-    const bar = h("div", { class: "tabs", role: "tablist" });
-    const panel = h("div", { role: "tabpanel" });
-    p.append(bar, panel);
-    const select = (key, push = true) => {
-      for (const b of bar.children) b.setAttribute("aria-selected", String(b.dataset.key === key));
-      if (push) history.replaceState({}, "", `${location.pathname}${location.search}#${key}`);
-      clear(panel);
-      if (key === "run") runPanel(panel, tool);
-      else if (key === "dashboard") dashboardPanel(panel, tool);
-      else aboutPanel(panel, tool);
-    };
-    for (const [key, label] of tabs) {
-      bar.append(h("button", { role: "tab", type: "button", "data-key": key, text: label, onclick: () => select(key) }));
-    }
-    const fromHash = location.hash.slice(1);
-    select(tabs.some(([k]) => k === fromHash) ? fromHash : tool.status === "live" ? "run" : "about", false);
-  }
-
-  function aboutPanel(panel, tool) {
-    panel.append(h("div", { class: "card about" },
-      h("h2", { text: `What ${tool.name} does` }),
-      h("p", { text: tool.about, class: "mt" }),
-      h("ul", { class: "checklist" }, tool.does.map((d) => h("li", null, icon("check"), h("span", { text: d })))),
-      h("div", { class: "io" },
-        h("div", null, h("div", { class: "k", text: "You give it" }), h("div", { text: tool.input })),
-        h("div", null, h("div", { class: "k", text: "You get back" }), h("div", { text: tool.output })))));
-  }
-
-  async function runPanel(panel, tool) {
-    if (tool.status !== "live") {
-      panel.append(h("div", { class: "notice warn" }, icon("alert"),
-        h("div", null, h("strong", { text: `${tool.name} is being built. ` }),
-          "The form below shows what it will take. Its dashboard is already recording your visits, and the About tab says what it will do.")));
-    }
-    const card = h("div", { class: "card" });
-    panel.append(card);
-    const result = h("div");
-    panel.append(result);
-    let repoOptions = null;
-    if (tool.fields.some((f) => f.type === "repo")) {
-      try { repoOptions = (await api("GET", "/api/imports")).imports; } catch (e) { repoOptions = []; }
-    }
-    const fields = tool.fields.map((f) => ({ ...f, type: f.type === "url" ? "text" : f.type === "repo" ? "text" : f.type,
-      inputmode: f.type === "url" ? "url" : null, required: !!f.required,
-      hint: f.type === "repo" ? (repoOptions && repoOptions.length ? `Imported: ${repoOptions.map((r) => r.repo).join(", ")}`
-        : "Import a repository first under Settings → GitHub.") : null }));
-    const f = form({
-      fields, submit: tool.status === "live" ? h("span", null, "Run ", tool.name) : "Not running yet",
-      submitClass: "primary",
-      onSubmit: async (values) => {
-        if (tool.status !== "live") throw new Error(`${tool.name} is not running yet - its engine is being built.`);
-        clear(result).append(h("div", { class: "card loading" }, h("span", { class: "spinner" }), " Running…"));
-        try {
-          const r = await api("POST", `/api/tools/${tool.slug}/run`, { fields: values });
-          showResult(result, tool, r);
-        } catch (e) {
-          clear(result);
-          throw e;
-        }
-      },
+      h("button", { class: "btn small", type: "button", onclick: () => popOut(location.pathname + location.hash) }, icon("external"), "Open in new window")]);
+    tabs(p, [["tools", "Sub-tools"], ["dashboard", "Dashboard"], ["about", "About"]], "tools", (key, panel) => {
+      if (key === "tools") {
+        panel.append(h("div", { class: "subgrid" }, tool.subtools.map((x) => h("div", { class: "card subcard" },
+          h("div", { class: "row-between" }, h("h2", null, h("a", { href: `/t/${tool.slug}/${x.slug}`, "data-link": true, text: x.name })), subStatus(x)),
+          h("p", { class: "muted", text: x.tagline }),
+          h("div", { class: "head-actions mt" },
+            h("a", { class: "btn small primary", href: `/t/${tool.slug}/${x.slug}`, "data-link": true, text: "Open" }),
+            h("button", { class: "btn small", type: "button", onclick: () => popOut(`/t/${tool.slug}/${x.slug}`) }, icon("external"), "New window"))))));
+      } else if (key === "dashboard") dashboardPanel(panel, tool);
+      else aboutTool(panel, tool);
     });
-    if (tool.status !== "live") f.querySelector("button[type=submit]").disabled = true;
-    card.append(h("div", { class: "card-head" }, h("h2", { text: "Run" }), h("p", { text: tool.input })), f);
-    const want = new URLSearchParams(location.search).get("run");
-    if (want) {
-      try {
-        const r = await api("GET", `/api/runs/${encodeURIComponent(want)}`);
-        if (r.tool === tool.slug) {
-          for (const [k, v] of Object.entries(r.input)) if (f.inputs[k]) f.inputs[k].value = v;
-          showResult(result, tool, r);
-        }
-      } catch (e) { /* stale link: just show the form */ }
-    }
   }
 
-  function showResult(result, tool, r) {
-    clear(result);
-    if (r.status === "error") {
-      result.append(h("div", { class: "notice bad" }, icon("alert"), h("div", { text: r.summary })));
-      return;
-    }
-    if (tool.slug === "site-audit") result.append(auditView(r.output, r));
-    else result.append(h("pre", { class: "card mono", text: JSON.stringify(r.output, null, 2) }));
+  function aboutTool(panel, tool) {
+    panel.append(h("div", { class: "card about" }, h("h2", { text: `What ${tool.name} does` }), h("p", { class: "mt", text: tool.about })));
+    for (const x of tool.subtools) panel.append(aboutCard(x));
   }
-
-  function auditView(o, r) {
-    const C = 2 * Math.PI * 34;
-    const ring = s("svg", { class: "ring", viewBox: "0 0 84 84", role: "img", "aria-label": `Score ${o.score} out of 100` },
-      s("circle", { class: "track", cx: 42, cy: 42, r: 34, fill: "none", "stroke-width": 8 }),
-      s("circle", { class: "bar", cx: 42, cy: 42, r: 34, fill: "none", "stroke-width": 8,
-        "stroke-dasharray": C, "stroke-dashoffset": C * (1 - o.score / 100), transform: "rotate(-90 42 42)" }),
-      s("text", { x: 42, y: 50, "text-anchor": "middle" }, String(o.score)));
-    const st = { pass: ["check", "Pass"], warn: ["alert", "Warning"], fail: ["x", "Fail"] };
-    const badge = (k) => h("span", { class: `status ${k}` }, icon(st[k][0]), st[k][1]);
-    const wrap = h("div");
-    wrap.append(h("div", { class: "card" },
-      h("div", { class: "score" }, ring,
-        h("div", { class: "grow" },
-          h("h2", { text: o.final_url }),
-          h("p", { class: "muted", text: `Answered ${o.status} in ${o.elapsed_ms} ms · run ${ago(r.created_at || Date.now() / 1000)}` }),
-          h("div", { class: "counts" },
-            h("span", { class: "status fail" }, icon("x"), `${o.counts.fail} fail`),
-            h("span", { class: "status warn" }, icon("alert"), `${o.counts.warn} warning`),
-            h("span", { class: "status pass" }, icon("check"), `${o.counts.pass} pass`))))));
-    if (o.facts) {
-      const fx = o.facts;
-      wrap.append(h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "What the page says about itself" })),
-        h("div", { class: "facts" },
-          [["Title", fx.title || "—"], ["Description", fx.description || "—"], ["H1", fx.h1.join(" · ") || "—"],
-            ["Words", fx.words.toLocaleString()], ["Links in / out", `${fx.links_internal} / ${fx.links_external}`],
-            ["Structured data", fx.schema_types.join(", ") || "none"]]
-            .map(([k, v]) => h("div", { title: v }, h("div", { class: "k", text: k }), h("div", { class: "v", text: v }))))));
-    }
-    wrap.append(h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Checks" }),
-      h("p", { text: "Failures first, then warnings, heaviest first" })),
-      h("ul", { class: "checks" }, o.checks.map((c) => h("li", null, badge(c.status),
-        h("div", null, h("div", { class: "label", text: c.label }), h("div", { class: "detail", text: c.detail }),
-          c.fix ? h("div", { class: "fix" }, h("b", { text: "Fix: " }), c.fix) : null))))));
-    return wrap;
+  function aboutCard(x) {
+    return h("div", { class: "card about" },
+      h("div", { class: "row-between" }, h("h2", { text: x.name }), subStatus(x)),
+      h("p", { class: "mt", text: x.about }),
+      h("ul", { class: "checklist" }, x.does.map((d) => h("li", null, icon("check"), h("span", { text: d })))),
+      h("div", { class: "io" },
+        h("div", null, h("div", { class: "k", text: "You give it" }), h("div", { text: x.input })),
+        h("div", null, h("div", { class: "k", text: "You get back" }), h("div", { text: x.output }))));
   }
 
   async function dashboardPanel(panel, tool) {
     const body = h("div", { class: "loading", text: "Loading…" });
     panel.append(body);
     let st, runs;
-    try {
-      [st, runs] = await Promise.all([api("GET", `/api/tools/${tool.slug}/stats`), api("GET", `/api/tools/${tool.slug}/runs`)]);
-    } catch (e) { clear(body).append(e.message); return; }
+    try { [st, runs] = await Promise.all([api("GET", `/api/tools/${tool.slug}/stats`), api("GET", `/api/tools/${tool.slug}/runs`)]); }
+    catch (e) { clear(body).append(e.message); return; }
     const rate = st.runs ? `${Math.round((100 * st.ok) / st.runs)}%` : "—";
-    const scoring = tool.slug === "site-audit";
+    const scores = st.scores.map((x) => ({ ...x, name: subName(tool.slug, x.subtool) }));
     swap(body,
       h("div", { class: "grid tiles" },
-        tile("Visits", String(st.opens), "times you opened it"),
+        tile("Visits", String(st.opens), "times opened"),
         tile("Runs", String(st.runs), st.last_run ? `last ${ago(st.last_run)}` : "none yet"),
         tile("Succeeded", rate, st.errors ? `${st.errors} failed` : "no failures"),
-        scoring ? tile("Average score", st.avg_score === null ? "—" : `${st.avg_score}`, st.best_score === null ? "" : `best ${st.best_score}`)
-          : tile("Average time", st.avg_ms === null ? "—" : `${(st.avg_ms / 1000).toFixed(1)} s`, "per run")),
+        tile("Average time", st.avg_ms === null ? "—" : `${(st.avg_ms / 1000).toFixed(1)} s`, "per run")),
+      h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "By sub-tool" })),
+        h("div", { class: "table-wrap" }, h("table", { class: "table" },
+          h("thead", null, h("tr", null, h("th", { text: "Sub-tool" }), h("th", { class: "num", text: "Runs" }), h("th", { class: "num", text: "Succeeded" }),
+            h("th", { class: "num", text: "Average score" }), h("th", { text: "Last run" }))),
+          h("tbody", null, st.subtools.map((x) => h("tr", null,
+            h("td", null, h("a", { href: `/t/${tool.slug}/${x.slug}`, "data-link": true, text: x.name })),
+            h("td", { class: "num", text: String(x.runs) }), h("td", { class: "num", text: String(x.ok) }),
+            h("td", { class: "num", text: x.avg_score === null ? "—" : String(x.avg_score) }),
+            h("td", { class: "muted", text: ago(x.last) }))))))),
       h("div", { class: "grid two" },
         h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Runs per day" }), h("p", { text: "Last 14 days" })),
           barChart(st.daily.map((x) => ({ day: x.day, value: x.runs })), { unit: "runs", label: `${tool.name} runs per day` })),
         h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Visits per day" }), h("p", { text: "Last 14 days" })),
           barChart(st.daily.map((x) => ({ day: x.day, value: x.opens })), { unit: "visits", alt: true, label: `${tool.name} visits per day` }))),
-      scoring && st.scores.length ? h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Score over your last runs" }),
-        h("p", { text: "Out of 100, oldest on the left" })), lineChart(st.scores, { label: "Audit score over recent runs" })) : null,
-      h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Run history" }), h("p", { text: "Click a run to open its result" })),
-        runs.runs.length ? h("div", { class: "table-wrap" }, h("table", { class: "table" },
-          h("thead", null, h("tr", null, h("th", { text: "When" }), h("th", { text: "Result" }), h("th", { class: "num", text: "Score" }), h("th", { class: "num", text: "Time" }))),
-          h("tbody", null, runs.runs.map((r) => h("tr", { class: "click", onclick: () => go(`/t/${tool.slug}?run=${r.id}#run`) },
-            h("td", { class: "muted", text: ago(r.created_at) }),
-            h("td", null, r.status === "error" ? h("span", { class: "status fail" }, icon("x"), "Failed") : null, " ", r.summary),
-            h("td", { class: "num", text: r.score === null ? "" : String(r.score) }),
-            h("td", { class: "num", text: `${(r.duration_ms / 1000).toFixed(1)} s` })))))) :
-          h("p", { class: "muted", text: tool.status === "live" ? "No runs yet - use the Run tab." : "Runs will appear here once the engine is live." })));
+      scores.length ? h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Scores over your last runs" }),
+        h("p", { text: "Out of 100, oldest on the left" })), lineChart(scores, { label: "Scores over recent runs" })) : null,
+      historyCard(tool, runs.runs, true));
+  }
+
+  function historyCard(tool, runs, withSub) {
+    return h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Run history" }), h("p", { text: "Click a run to open its result" })),
+      runs.length ? h("div", { class: "table-wrap" }, h("table", { class: "table" },
+        h("thead", null, h("tr", null, h("th", { text: "When" }), withSub ? h("th", { text: "Sub-tool" }) : null, h("th", { text: "Result" }),
+          h("th", { class: "num", text: "Score" }), h("th", { class: "num", text: "Time" }))),
+        h("tbody", null, runs.map((r) => h("tr", { class: "click", onclick: () => go(runLink({ ...r, tool: tool.slug })) },
+          h("td", { class: "muted", text: ago(r.created_at) }),
+          withSub ? h("td", { text: subName(tool.slug, r.subtool) }) : null,
+          h("td", null, r.status === "error" ? badge("fail", "Failed") : null, " ", r.summary),
+          h("td", { class: "num", text: r.score === null ? "" : String(r.score) }),
+          h("td", { class: "num", text: `${(r.duration_ms / 1000).toFixed(1)} s` })))))) :
+        h("p", { class: "muted", text: "No runs yet." }));
+  }
+
+  // ---------------------------------------------------------------- sub-tool page
+  function subPage(main, tool, sub) {
+    api("POST", "/api/events", { tool: tool.slug, subtool: sub.slug, kind: "open" }).catch(() => {});
+    const crumb = h("div", { class: "crumb" }, h("a", { href: `/t/${tool.slug}`, "data-link": true, text: tool.name }), icon("chevron"));
+    const p = page(main, sub.name, sub.tagline, [subStatus(sub),
+      h("button", { class: "btn small", type: "button", onclick: () => popOut(location.pathname + location.search + location.hash) }, icon("external"), "Open in new window")], crumb);
+    const first = sub.kind === "page" ? "workspace" : "run";
+    const list = sub.kind === "page" ? [["workspace", sub.name], ["about", "About"]] : [["run", "Run"], ["history", "History"], ["about", "About"]];
+    tabs(p, list, first, (key, panel) => {
+      if (key === "run") runPanel(panel, tool, sub);
+      else if (key === "workspace") (sub.slug === "list" ? leadList : clientsPage)(panel);
+      else if (key === "history") subHistory(panel, tool, sub);
+      else panel.append(aboutCard(sub));
+    });
+  }
+
+  async function subHistory(panel, tool, sub) {
+    const body = h("div", { class: "loading", text: "Loading…" });
+    panel.append(body);
+    try {
+      const d = await api("GET", `/api/tools/${tool.slug}/runs`);
+      swap(body, historyCard(tool, d.runs.filter((r) => r.subtool === sub.slug), false));
+    } catch (e) { clear(body).append(e.message); }
+  }
+
+  async function runPanel(panel, tool, sub) {
+    if (sub.status === "needs-ai") {
+      panel.append(h("div", { class: "notice warn" }, icon("alert"), h("div", null,
+        h("strong", { text: `${sub.name} needs an AI engine. ` },),
+        "Set one up on the server (see the README: RANKLOOM_AI). Until then this form shows what it will take.")));
+    }
+    const card = h("div", { class: "card" });
+    const result = h("div");
+    panel.append(card, result);
+    const params = new URLSearchParams(location.search);
+    const values = {};
+    for (const f of sub.fields) if (params.get(f.name)) values[f.name] = params.get(f.name);
+    if (values.lead) {
+      try {
+        const d = await api("GET", "/api/leads");
+        const lead = d.leads.find((x) => String(x.id) === values.lead);
+        if (lead) {
+          values.business = values.business || lead.name;
+          values.site = values.site || lead.website;
+          card.append(h("div", { class: "notice" }, icon("info"), h("div", null, "Writing to lead ", h("strong", { text: lead.name }), lead.city ? ` in ${lead.city}` : "")));
+        }
+      } catch (e) { /* the form still works */ }
+    }
+    const f = form({
+      fields: sub.fields, values, submitClass: "primary",
+      submit: sub.status === "live" ? h("span", null, "Run ", sub.name) : "Needs an AI engine",
+      onSubmit: async (vals) => {
+        clear(result).append(h("div", { class: "card loading" }, h("span", { class: "spinner" }), ` Running ${sub.name}…`));
+        try {
+          const r = await api("POST", `/api/tools/${tool.slug}/${sub.slug}/run`, { fields: vals });
+          showResult(result, r);
+        } catch (e) {
+          clear(result);
+          if (e.data && e.data.output) { showResult(result, e.data); return; }
+          throw e;
+        }
+      },
+    });
+    if (sub.status !== "live") f.querySelector("button[type=submit]").disabled = true;
+    card.append(h("div", { class: "card-head" }, h("h2", { text: sub.name }), h("p", { text: sub.input })), f);
+    const want = params.get("run");
+    if (want) {
+      try {
+        const r = await api("GET", `/api/runs/${encodeURIComponent(want)}`);
+        if (r.tool === tool.slug && r.subtool === sub.slug) {
+          for (const [k, v] of Object.entries(r.input)) if (f.inputs[k] && f.inputs[k].type !== "file" && typeof v === "string") f.inputs[k].value = v;
+          showResult(result, r);
+        }
+      } catch (e) { /* stale link: just show the form */ }
+    }
+  }
+
+  function showResult(result, r) {
+    clear(result);
+    if (r.status === "error") {
+      result.append(h("div", { class: "notice bad" }, icon("alert"), h("div", { text: r.summary })));
+      return;
+    }
+    const isReport = r.tool === "client-reports";
+    if (isReport) {
+      result.append(h("div", { class: "head-actions report-actions" },
+        h("button", { class: "btn primary", type: "button", onclick: () => window.print() }, icon("print"), "Print or save as PDF")));
+    }
+    const v = viewResult(r.output, r);
+    if (isReport) v.classList.add("report");
+    result.append(v);
+  }
+
+  // ---------------------------------------------------------------- Lead List
+  async function leadList(panel) {
+    const body = h("div", { class: "loading", text: "Loading leads…" });
+    panel.append(body);
+    let d;
+    try { d = await api("GET", "/api/leads"); } catch (e) { clear(body).append(e.message); return; }
+    const filter = h("select", { "aria-label": "Status" }, h("option", { value: "", text: "All statuses" }),
+      d.statuses.map((x) => h("option", { value: x, text: x[0].toUpperCase() + x.slice(1) })));
+    const search = h("input", { type: "search", placeholder: "Search name, city or website", "aria-label": "Search leads" });
+    const fileInput = h("input", { type: "file", accept: ".csv", hidden: true });
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const r = await api("POST", "/api/leads/import", { csv: text });
+        toast(`Imported ${r.added} lead(s)` + (r.skipped ? `, skipped ${r.skipped} without a name` : ""));
+        clear(panel); leadList(panel);
+      } catch (e) { toast(e.message); }
+      fileInput.value = "";
+    });
+    const counts = Object.fromEntries(d.statuses.map((x) => [x, d.leads.filter((l) => l.status === x).length]));
+    const tableBody = h("tbody");
+    const draw = () => {
+      clear(tableBody);
+      const q = search.value.toLowerCase();
+      const rows = d.leads.filter((l) => (!filter.value || l.status === filter.value) &&
+        (!q || [l.name, l.city, l.website].join(" ").toLowerCase().includes(q)));
+      if (!rows.length) { tableBody.append(h("tr", null, h("td", { colspan: 7, class: "muted", text: d.leads.length ? "No leads match." : "No leads yet. Run Business Search, or import a CSV." }))); return; }
+      for (const l of rows.slice(0, 500)) {
+        const status = h("select", { "aria-label": `Status of ${l.name}` }, d.statuses.map((x) => h("option", { value: x, text: x })));
+        status.value = l.status;
+        status.addEventListener("change", async () => {
+          try { await api("POST", "/api/leads/update", { id: l.id, status: status.value }); l.status = status.value; toast(`${l.name}: ${status.value}`); }
+          catch (e) { toast(e.message); status.value = l.status; }
+        });
+        const notes = h("input", { type: "text", value: l.notes, placeholder: "Notes", "aria-label": `Notes for ${l.name}` });
+        notes.addEventListener("change", async () => {
+          try { await api("POST", "/api/leads/update", { id: l.id, notes: notes.value }); l.notes = notes.value; toast("Notes saved"); }
+          catch (e) { toast(e.message); }
+        });
+        const site = safeHref(l.website && !/^https?:/i.test(l.website) ? `https://${l.website}` : l.website);
+        tableBody.append(h("tr", null,
+          h("td", null, h("strong", { text: l.name }), h("div", { class: "muted", text: [l.category, l.city].filter(Boolean).join(" · ") })),
+          h("td", null, site ? h("a", { href: site, target: "_blank", rel: "noopener noreferrer", text: l.website }) : h("span", { class: "muted", text: "no website" }),
+            l.phone ? h("div", { class: "muted", text: l.phone }) : null),
+          h("td", { class: "num", text: l.score === null ? "—" : String(l.score) }),
+          h("td", { class: "muted small-text", text: (l.problems || []).slice(0, 2).join("; ") }),
+          h("td", null, status), h("td", null, notes),
+          h("td", { class: "num nowrap" },
+            h("a", { class: "btn small", href: `/t/lead-finder/outreach?lead=${l.id}`, "data-link": true, text: "Draft" }),
+            h("button", { class: "btn small ghost", type: "button", title: `Delete ${l.name}`, "aria-label": `Delete ${l.name}`, onclick: async () => {
+              try { await api("POST", "/api/leads/delete", { id: l.id }); d.leads = d.leads.filter((x) => x.id !== l.id); draw(); } catch (e) { toast(e.message); }
+            } }, icon("trash")))));
+      }
+    };
+    filter.addEventListener("change", draw);
+    search.addEventListener("input", draw);
+    swap(body,
+      h("div", { class: "grid tiles" }, d.statuses.slice(0, 4).map((x) => tile(x[0].toUpperCase() + x.slice(1), String(counts[x]), x === "new" ? "to contact" : ""))),
+      h("div", { class: "card" },
+        h("div", { class: "toolbar" }, search, filter,
+          h("div", { class: "head-actions" },
+            h("button", { class: "btn small", type: "button", onclick: () => fileInput.click() }, icon("upload"), "Import CSV"),
+            h("a", { class: "btn small", href: "/api/leads/export", download: "rankloom-leads.csv" }, icon("download"), "Export CSV"),
+            h("a", { class: "btn small primary", href: "/t/lead-finder/search", "data-link": true, text: "Find more" })), fileInput),
+        h("p", { class: "muted small-text", text: "CSV import reads columns named name (or business), website, phone, email, address, city and category, in any order." }),
+        h("div", { class: "table-wrap" }, h("table", { class: "table leads" },
+          h("thead", null, h("tr", null, ["Business", "Website", "Opportunity", "Found", "Status", "Notes", ""].map((c) => h("th", { text: c })))),
+          tableBody))));
+    draw();
+  }
+
+  // ---------------------------------------------------------------- Clients
+  async function clientsPage(panel) {
+    const body = h("div", { class: "loading", text: "Loading clients…" });
+    panel.append(body);
+    let d;
+    try { d = await api("GET", "/api/clients"); } catch (e) { clear(body).append(e.message); return; }
+    const editor = h("div", { class: "card", hidden: true });
+    const openEditor = (c) => {
+      clear(editor).append(h("div", { class: "card-head" }, h("h2", { text: c ? `Edit ${c.name}` : "Add a client" })));
+      const f = form({
+        fields: [
+          { name: "name", label: "Client name", required: true },
+          { name: "website", label: "Website", type: "url", placeholder: "client.example" },
+          { name: "city", label: "City", placeholder: "Lahore" },
+          { name: "niche", label: "Business type", placeholder: "dentist" },
+          { name: "contact", label: "Contact", placeholder: "name, email or phone" },
+          { name: "brand", label: "Prepared by (shown on the report)", placeholder: "Your agency name" },
+          { name: "gsc_dataset", label: "Search Console report", type: "dataset", hint: "Import one under Search Performance → Import Report." },
+          { name: "notes", label: "Notes", type: "textarea" },
+        ],
+        values: c ? { ...c, gsc_dataset: c.gsc_dataset ? String(c.gsc_dataset) : "" } : {},
+        submit: c ? "Save client" : "Add client", submitClass: "primary",
+        onSubmit: async (v) => {
+          await api("POST", "/api/clients/save", { ...v, id: c ? c.id : undefined, gsc_dataset: v.gsc_dataset || null });
+          toast(c ? "Client saved" : "Client added"); clear(panel); clientsPage(panel);
+        },
+      });
+      editor.append(f, h("button", { class: "btn ghost mt", type: "button", onclick: () => { editor.hidden = true; }, text: "Cancel" }));
+      editor.hidden = false;
+      editor.scrollIntoView({ behavior: "smooth", block: "start" });
+    };
+    swap(body,
+      h("div", { class: "card" },
+        h("div", { class: "card-head" }, h("h2", { text: `${d.clients.length} client(s)` }),
+          h("button", { class: "btn small primary", type: "button", onclick: () => openEditor(null) }, "Add a client")),
+        d.clients.length ? h("div", { class: "table-wrap" }, h("table", { class: "table" },
+          h("thead", null, h("tr", null, ["Client", "Website", "Search Console", "Last report", ""].map((c) => h("th", { text: c })))),
+          h("tbody", null, d.clients.map((c) => h("tr", null,
+            h("td", null, h("strong", { text: c.name }), h("div", { class: "muted", text: [c.niche, c.city].filter(Boolean).join(" · ") })),
+            h("td", { text: c.website || "—" }),
+            h("td", { class: "muted", text: c.gsc_dataset ? "linked" : "—" }),
+            h("td", null, c.last_report_id ? h("a", { href: `/t/client-reports/report?run=${c.last_report_id}#run`, "data-link": true, text: ago(c.last_report) }) : h("span", { class: "muted", text: "none" })),
+            h("td", { class: "num nowrap" },
+              h("a", { class: "btn small primary", href: `/t/client-reports/report?client=${c.id}`, "data-link": true, text: "Monthly report" }),
+              h("button", { class: "btn small", type: "button", onclick: () => openEditor(c), text: "Edit" }),
+              h("button", { class: "btn small ghost", type: "button", "aria-label": `Delete ${c.name}`, title: `Delete ${c.name}`, onclick: async () => {
+                if (!window.confirm(`Delete ${c.name}? Their past reports stay in the history.`)) return;
+                try { await api("POST", "/api/clients/delete", { id: c.id }); clear(panel); clientsPage(panel); } catch (e) { toast(e.message); }
+              } }, icon("trash")))))))) :
+          h("p", { class: "muted", text: "No clients yet. Add one to start sending monthly reports." })),
+      editor);
   }
 
   // ---------------------------------------------------------------- settings
@@ -673,8 +963,6 @@
       content.append(c);
       return c;
     };
-
-    // Profile
     sec("profile", "Profile").append(form({
       fields: [{ name: "name", label: "Name", value: state.user.name, autocomplete: "name" },
         { name: "email", label: "Email", value: state.user.email, readonly: true }],
@@ -684,10 +972,7 @@
         state.user.name = v.name.trim(); state.shell = null; toast("Profile saved"); render();
       },
     }));
-
-    // Password
-    const pw = sec("password", "Change password", "Changing it signs you out everywhere else.");
-    const pwForm = form({
+    sec("password", "Change password", "Changing it signs you out everywhere else.").append(form({
       fields: [{ name: "current", label: "Current password", type: "password", autocomplete: "current-password" },
         { name: "new", label: "New password", type: "password", autocomplete: "new-password", hint: "At least 10 characters." },
         { name: "confirm", label: "Repeat new password", type: "password", autocomplete: "new-password" }],
@@ -698,27 +983,16 @@
         Object.values(inputs).forEach((i) => { i.value = ""; });
         toast(r.other_sessions_ended ? `Password changed. ${r.other_sessions_ended} other device(s) signed out.` : "Password changed.");
       },
-    });
-    pw.append(pwForm);
-
-    // 2-step
-    const tfa = sec("two-step", "2-step verification", "Ask for a code from an authenticator app every time you sign in.");
+    }));
     const tfaBody = h("div");
-    tfa.append(tfaBody);
+    sec("two-step", "2-step verification", "Ask for a code from an authenticator app every time you sign in.").append(tfaBody);
     await renderTwoStep(tfaBody);
-
-    // Sessions
-    const ss = sec("sessions", "Devices", "Everywhere your account is signed in.");
     const ssBody = h("div");
-    ss.append(ssBody);
+    sec("sessions", "Devices", "Everywhere your account is signed in.").append(ssBody);
     renderSessions(ssBody);
-
-    // GitHub
-    const gh = sec("github", "GitHub", "Connect your account to import repositories into your tools.");
     const ghBody = h("div");
-    gh.append(ghBody);
+    sec("github", "GitHub", "Connect your account to import repositories.").append(ghBody);
     renderGitHub(ghBody);
-
     const q = new URLSearchParams(location.search).get("github");
     if (q === "connected") toast("GitHub connected");
     else if (q === "failed") toast("GitHub sign-in failed. Try again.");
@@ -798,11 +1072,8 @@
       h("div", null, h("strong", { text: "Save these recovery codes now. " }), "Each one signs you in once if you lose your phone. They will not be shown again.")),
       h("div", { class: "codes" }, codes.map((c) => h("div", { text: c }))),
       h("div", { class: "head-actions" },
-        h("button", { class: "btn", type: "button", onclick: () => {
-          const a = h("a", { href: URL.createObjectURL(new Blob([text], { type: "text/plain" })), download: "rankloom-recovery-codes.txt" });
-          document.body.append(a); a.click(); a.remove();
-        } }, icon("download"), "Download"),
-        h("button", { class: "btn", type: "button", onclick: () => navigator.clipboard.writeText(text).then(() => toast("Copied")) }, "Copy"),
+        h("button", { class: "btn", type: "button", onclick: () => download("rankloom-recovery-codes.txt", text) }, icon("download"), "Download"),
+        h("button", { class: "btn", type: "button", onclick: () => copyText(text) }, icon("copy"), "Copy"),
         h("button", { class: "btn primary", type: "button", onclick: () => renderTwoStep(box) }, "I have saved them")));
   }
 
@@ -862,9 +1133,9 @@
       } }, "Disconnect")));
     const imported = h("div");
     const list = h("div", { class: "repo-list" }, h("div", { class: "loading", text: "Loading your repositories…" }));
-    const filter = h("input", { type: "search", placeholder: "Filter repositories", "aria-label": "Filter repositories" });
+    const filterBox = h("input", { type: "search", placeholder: "Filter repositories", "aria-label": "Filter repositories" });
     box.append(h("h3", { text: "Imported repositories" }), imported,
-      h("h3", { text: "Import a repository", class: "mt" }), h("div", { class: "field" }, filter), list);
+      h("h3", { text: "Import a repository", class: "mt" }), h("div", { class: "field" }, filterBox), list);
     const refreshImports = async () => {
       const d = await api("GET", "/api/imports");
       clear(imported);
@@ -877,7 +1148,7 @@
     refreshImports();
     let repos = [];
     const drawRepos = () => {
-      const q = filter.value.toLowerCase();
+      const q = filterBox.value.toLowerCase();
       clear(list);
       const shown = repos.filter((r) => r.full_name.toLowerCase().includes(q));
       if (!shown.length) { list.append(h("div", { class: "loading", text: "No repositories match." })); return; }
@@ -894,7 +1165,7 @@
           h("div", { class: "d", text: [r.language, r.description].filter(Boolean).join(" · ") || "No description" })), btn));
       }
     };
-    filter.addEventListener("input", drawRepos);
+    filterBox.addEventListener("input", drawRepos);
     try { repos = (await api("GET", "/api/github/repos")).repos; drawRepos(); }
     catch (e) { clear(list).append(h("div", { class: "loading", text: e.message })); }
   }
@@ -927,7 +1198,7 @@
       }),
       h("p", { class: "auth-alt" }, "New here? ", h("a", { href: "/register", "data-link": true, text: "Create an account" }))),
 
-    "/register": () => authPage("Create your account", "One account for all nine tools.",
+    "/register": () => authPage("Create your account", "One account for every tool.",
       form({
         fields: [{ name: "name", label: "Name", autocomplete: "name" },
           { name: "email", label: "Email", type: "email", autocomplete: "email" },

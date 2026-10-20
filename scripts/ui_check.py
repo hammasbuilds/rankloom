@@ -2,15 +2,18 @@
 
     uv run python scripts/ui_check.py
 
-The server runs in this process on a free port with a throwaway data folder, and the Site Audit
-engine reads two fixture pages instead of the internet, so the walk is the same on every machine.
-The walk registers, runs two audits, reads the dashboard, turns on 2-step verification with a
-code the page computes itself, signs out, signs back in through the 2-step screen, and then
-repeats the core pages at phone width checking for sideways scrolling.
+The server runs in this process on a free port with a throwaway data folder. Websites are fixture
+pages, and autocomplete and OpenStreetMap answers are recordings of real replies, so the walk is
+the same on every machine. It registers; runs every sub-tool that can run without an AI engine;
+uses Lead List and Clients; imports a Search Console export through the real file input; prints
+a monthly report; checks the two AI sub-tools say what they need; turns on 2-step verification
+with a code the page computes; signs out and back in; and repeats the core pages at phone width.
 """
 
 from __future__ import annotations
 
+import base64
+import io
 import json
 import os
 import shutil
@@ -18,28 +21,155 @@ import subprocess
 import sys
 import tempfile
 import threading
+import zipfile
 from pathlib import Path
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 
-from test_site_audit import BAD, GOOD, fetcher  # noqa: E402
+from test_engines import LOCAL  # noqa: E402
+from test_site_audit import BAD, GOOD  # noqa: E402
 
-from rankloom import engines, server  # noqa: E402
-from rankloom.engines import site_audit  # noqa: E402
+from rankloom import server, sources  # noqa: E402
+from rankloom.netguard import Response  # noqa: E402
 
-PAGES = {
-    "https://solar.example/": (
-        200,
-        GOOD,
-        {"content-encoding": "gzip"},
-        "https://solar.example/",
-        [],
+WORDS = "Rooftop solar panels inverters net metering battery backup installation. " * 40
+SOLAR_PAGES = {
+    "/": GOOD.replace(
+        "</body>",
+        "<a href=/prices>Prices</a><a href=/about>About</a>"
+        "<a href=/contact>Contact</a><a href=/old-offer>Offer</a></body>",
     ),
-    "https://solar.example/robots.txt": (200, "User-agent: *\nSitemap: /sitemap.xml", {}, "", []),
-    "https://bad.example/": (200, BAD, {}, "https://bad.example/", [(301, "http://bad.example/")]),
+    "/prices": f"<html lang=en><head><title>Solar prices in Lahore</title></head><body>"
+    f"<h1>Prices</h1><p>{WORDS}</p></body></html>",
+    "/about": "<html lang=en><head><title>Solar prices in Lahore</title></head><body>"
+    "<h1>About</h1><p>We install panels.</p></body></html>",
+    "/contact": "<html lang=en><head><title>Contact</title></head><body><p>Call us</p></body></html>",
+    "/robots.txt": "User-agent: *\nAllow: /\n\nUser-agent: GPTBot\nDisallow: /\n\n"
+    "Sitemap: https://solar.example/sitemap.xml\n",
+    "/sitemap.xml": "<urlset><url><loc>https://solar.example/</loc></url>"
+    "<url><loc>https://solar.example/prices</loc></url></urlset>",
 }
+SITES = {"solar.example": SOLAR_PAGES, "bad.example": {"/": BAD}, "smile.example": {"/": LOCAL}}
+
+
+def fixture_fetch(url: str) -> Response:
+    parts = urlsplit(url)
+    pages = SITES.get(parts.netloc.removeprefix("www."), {})
+    path = parts.path or "/"
+    if path not in pages:
+        return Response(
+            url=url,
+            status=404,
+            headers={"content-type": "text/html"},
+            body=b"<h1>Not found</h1>",
+            elapsed_ms=90,
+        )
+    ctype = "text/plain" if path.endswith(".txt") else "text/html; charset=utf-8"
+    return Response(
+        url=f"https://{parts.netloc}{path}",
+        status=200,
+        headers={"content-type": ctype, "content-encoding": "gzip"},
+        body=pages[path].encode(),
+        elapsed_ms=140,
+    )
+
+
+# Recorded from real autocomplete replies on 2026-10-20 (google, "solar lahore" and neighbours).
+RECORDED = [
+    "solar lahore",
+    "solar panel price in lahore",
+    "lahore solar market",
+    "solar installation lahore",
+    "how much does solar cost in lahore",
+    "best solar company in lahore",
+    "solar panel lahore price list",
+    "solar lahore near me",
+    "what is net metering lahore",
+    "solar inverter price in pakistan",
+    "is solar worth it in pakistan",
+    "solar vs wapda bill",
+    "dentist lahore",
+    "best dentist in lahore",
+    "dentist near me lahore",
+    "how much is root canal in lahore",
+]
+
+
+def recorded_suggest(query: str, country: str = "pk", language: str = "en"):
+    words = set(query.lower().split())
+    hits = [p for p in RECORDED if words & set(p.split())]
+    return "google", hits[:10]
+
+
+def recorded_places(trade: str, city: str, limit: int = 50, country: str = ""):
+    return [
+        {
+            "name": "Sunrise Dental",
+            "category": "dentist",
+            "website": "",
+            "phone": "+92 42 3577 1234",
+            "email": "",
+            "address": "Main Boulevard, Gulberg",
+            "city": city,
+            "source": "OpenStreetMap",
+        },
+        {
+            "name": "Old Town Dental",
+            "category": "dentist",
+            "website": "bad.example",
+            "phone": "0300 1111111",
+            "email": "",
+            "address": "Mall Road",
+            "city": city,
+            "source": "OpenStreetMap",
+        },
+        {
+            "name": "Smile Care",
+            "category": "dentist",
+            "website": "smile.example",
+            "phone": "0300 1234567",
+            "email": "",
+            "address": "12 Main Boulevard",
+            "city": city,
+            "source": "OpenStreetMap",
+        },
+    ]
+
+
+def gsc_zip_b64() -> str:
+    head = (
+        "Last 28 days Clicks,Previous 28 days Clicks,Last 28 days Impressions,"
+        "Previous 28 days Impressions,Last 28 days CTR,Previous 28 days CTR,"
+        "Last 28 days Position,Previous 28 days Position"
+    )
+    queries = [
+        ("solar panel price in lahore", 120, 150, 5400, 5200, "2.2%", "2.9%", 4.2, 3.6),
+        ("solar installation lahore", 64, 40, 2100, 1800, "3.05%", "2.2%", 6.1, 7.9),
+        ("net metering lahore", 9, 12, 2600, 2300, "0.35%", "0.52%", 11.4, 10.8),
+        ("solar inverter price", 3, 2, 1900, 1500, "0.16%", "0.13%", 14.2, 16.0),
+        ("best solar company lahore", 31, 35, 900, 950, "3.4%", "3.7%", 3.1, 2.9),
+        ("solar battery backup", 0, 4, 1300, 1100, "0%", "0.36%", 18.5, 15.2),
+    ]
+    pages = [
+        ("https://solar.example/", 150, 170, 7000, 6800, "2.1%", "2.5%", 5.0, 4.6),
+        ("https://solar.example/prices", 70, 55, 4100, 3600, "1.7%", "1.5%", 7.8, 9.0),
+        ("https://solar.example/net-metering", 7, 20, 2400, 2200, "0.29%", "0.9%", 12.0, 9.5),
+    ]
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr(
+            "Queries.csv",
+            "Top queries," + head + "\n" + "\n".join(",".join(map(str, q)) for q in queries),
+        )
+        z.writestr(
+            "Pages.csv",
+            "Top pages," + head + "\n" + "\n".join(",".join(map(str, p)) for p in pages),
+        )
+    return base64.b64encode(buf.getvalue()).decode()
+
 
 CHROME = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -47,10 +177,8 @@ CHROME = [
     "/usr/bin/google-chrome",
     "/usr/bin/chromium",
 ]
-
 FORBID = ["undefined", "NaN", "[object Object]", "null"]
 
-# Computes the current TOTP code for the secret on screen with WebCrypto.
 TOTP_JS = """
   const b32 = (s) => { const a = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'; let bits = '';
     for (const c of s.replace(/\\s/g, '')) bits += a.indexOf(c).toString(2).padStart(5, '0');
@@ -67,95 +195,264 @@ TOTP_JS = """
 """
 
 
-def fill_and_submit(values: dict, button="form button[type=submit]") -> list[dict]:
-    steps = [{"fill": f"input[name={k}]", "value": v} for k, v in values.items()]
-    steps.append({"click": button, "after": 900})
+def fill_and_submit(
+    values: dict, button="#main form button[type=submit]", after=1200
+) -> list[dict]:
+    steps = [{"fill": f"#main [name={k}]", "value": v} for k, v in values.items()]
+    steps.append({"click": button, "after": after})
     return steps
 
 
-def desktop_plan(base: str, shots: Path) -> dict:
-    email, pw = "ayesha@example.com", "tall-orange-river-42"
+def nav(path: str, after: int = 900) -> dict:
+    return {"click": f".sidebar a[href='{path}']", "after": after}
+
+
+def run_sub(
+    path: str,
+    values: dict,
+    wait: str = ".result",
+    shot: str | None = None,
+    shots: Path | None = None,
+) -> list[dict]:
     steps = [
+        nav(path),
+        {"waitFor": "#main form"},
+        *fill_and_submit(values),
+        {"waitFor": wait},
+        {
+            "label": f"no error notice after running {path}",
+            "js": "return !document.querySelector('#panel .notice.bad:not([hidden])');",
+        },
+        {"audit": FORBID},
+    ]
+    if shot and shots:
+        steps.append({"screenshot": str(shots / shot)})
+    return steps
+
+
+def auth_steps(name: str, email: str, pw: str) -> list[dict]:
+    return [
         {"waitFor": "form"},
         {
             "label": "light theme for the screenshots",
             "js": "document.documentElement.dataset.theme='light'; return true;",
         },
-        *fill_and_submit({"name": "Ayesha Khan", "email": email, "password": pw, "confirm": pw}),
+        *[
+            {"fill": f"input[name={k}]", "value": v}
+            for k, v in {"name": name, "email": email, "password": pw, "confirm": pw}.items()
+        ],
+        {"click": "form button[type=submit]", "after": 900},
         {"waitFor": ".sidebar .nav"},
+    ]
+
+
+def desktop_plan(base: str, shots: Path) -> dict:
+    email, pw = "ayesha@example.com", "tall-orange-river-42"
+    zip_b64 = gsc_zip_b64()
+    steps = [
+        *auth_steps("Ayesha Khan", email, pw),
         {
-            "label": "nine tool names in the sidebar, no numbers",
-            "js": "const n=[...document.querySelectorAll('.sidebar .nav[aria-label=Tools] a.item')].map(a=>a.textContent.trim());"
-            "return [n.length, n.every(t=>!/\\d/.test(t))];",
-            "expect": [9, True],
+            "label": "six tool names in the sidebar, no numbers",
+            "js": "const n=[...document.querySelectorAll('.sidebar .nav.tools > li.tool > .row > a.item')].map(a=>a.textContent.trim());"
+            "return [n, n.some(t=>/\\d/.test(t))];",
+            "expect": [
+                [
+                    "Site Audit",
+                    "AI Visibility",
+                    "Lead Finder",
+                    "Search Performance",
+                    "Content Studio",
+                    "Client Reports",
+                ],
+                False,
+            ],
         },
         {
-            "label": "each tool name is a real link (so ctrl-click opens a tab)",
-            "js": "return [...document.querySelectorAll('.sidebar .nav[aria-label=Tools] a.item')].every(a=>a.getAttribute('href').startsWith('/t/'));",
+            "label": "every tool and sub-tool has a window button",
+            "js": "return document.querySelectorAll('.sidebar .nav.tools .pop').length;",
+            "expect": 6 + 18,
         },
         {
             "label": "the window button opens a popup window, not just a tab",
             "js": "let got=null; const o=window.open; window.open=(u,t,f)=>{got=got||[u,f];return {};};"
-            "document.querySelector('.sidebar .pop').click(); window.open=o;"
-            "return got && got[0].startsWith('/t/') && /popup=yes/.test(got[1]);",
+            "document.querySelector('.sidebar .nav.tools .pop').click(); window.open=o;"
+            "return got && got[0]==='/t/site-audit' && /popup=yes/.test(got[1]);",
         },
         {"waitFor": ".tile"},
-        {"audit": FORBID},
         {"screenshot": str(shots / "overview.png")},
-        {"click": "a.item[href='/t/site-audit']", "after": 600},
-        {"waitFor": ".tabs"},
+        nav("/t/site-audit"),
+        {"waitFor": ".subgrid"},
         {
-            "label": "tabs",
-            "js": "return [...document.querySelectorAll('.tabs button')].map(b=>b.textContent);",
-            "expect": ["Run", "Dashboard", "About"],
+            "label": "opening a tool expands its sub-tools in the sidebar",
+            "js": "return [...document.querySelectorAll('li.tool.open .subnav a')].map(a=>a.textContent);",
+            "expect": ["Page Audit", "Site Crawl", "Local SEO Check"],
         },
-        *fill_and_submit({"url": "bad.example"}, "#main form button[type=submit]"),
-        {"waitFor": ".checks"},
-        *fill_and_submit({"url": "solar.example"}, "#main form button[type=submit]"),
-        {"waitFor": ".checks"},
-        {"expectText": ".ring", "contains": "100"},
+        {"screenshot": str(shots / "tool-home.png")},
+        *run_sub("/t/site-audit/page", {"url": "bad.example"}, ".result .checks"),
+        *run_sub(
+            "/t/site-audit/page",
+            {"url": "solar.example"},
+            ".result .checks",
+            "page-audit.png",
+            shots,
+        ),
+        {"expectText": ".result .ring", "contains": "100"},
+        nav("/t/site-audit/crawl"),
+        {"waitFor": "#main form"},
+        *fill_and_submit({"url": "solar.example"}),
+        {"waitFor": ".result table"},
+        {
+            "label": "crawl read the linked pages and flagged the broken one",
+            "js": "const t=document.querySelector('.result').innerText; return t.includes('/old-offer') && t.includes('Read 5 of');",
+        },
+        {"screenshot": str(shots / "site-crawl.png")},
+        nav("/t/site-audit/local"),
+        {"waitFor": "#main form"},
+        *fill_and_submit({"url": "smile.example", "city": "Lahore"}),
+        {"waitFor": ".result .checks"},
+        {
+            "label": "a complete local page scores 100",
+            "js": "const r=document.querySelector('#panel .result'); return [r.querySelector('h2').textContent, r.querySelector('.ring text').textContent];",
+            "expect": ["https://smile.example/", "100"],
+        },
+        nav("/t/ai-visibility/readiness"),
+        {"waitFor": "#main form"},
+        *fill_and_submit({"url": "solar.example"}),
+        {"waitFor": ".result table"},
+        {
+            "label": "GPTBot shows as blocked",
+            "js": "return [...document.querySelectorAll('.result tr')].some(r=>r.innerText.includes('GPTBot') && r.innerText.includes('blocked'));",
+        },
+        {"screenshot": str(shots / "ai-readiness.png")},
+        *run_sub(
+            "/t/ai-visibility/questions",
+            {"niche": "dentist", "city": "Lahore", "brand": "Smile Care"},
+            ".result ul.plain",
+        ),
+        nav("/t/ai-visibility/answers"),
+        {"waitFor": ".notice.warn"},
+        {
+            "label": "Answer Check says it needs an AI engine and cannot be run",
+            "js": "return document.querySelector('#main form button[type=submit]').disabled && document.querySelector('.notice.warn').innerText.includes('AI engine');",
+        },
+        nav("/t/lead-finder/search"),
+        {"waitFor": "#main form"},
+        *fill_and_submit({"trade": "dentists", "city": "Lahore"}),
+        {"waitFor": ".result table"},
+        {
+            "label": "leads are ranked by opportunity, most to gain first",
+            "js": "const v=[...document.querySelectorAll('.result tbody tr')].map(r=>+r.cells[3].innerText);"
+            "return [v.length, v.every((x,i)=>!i||v[i-1]>=x)];",
+            "expect": [3, True],
+        },
+        {"screenshot": str(shots / "lead-search.png")},
+        nav("/t/lead-finder/list"),
+        {"waitFor": "table.leads tbody tr"},
+        {
+            "label": "three saved leads",
+            "js": "return document.querySelectorAll('table.leads tbody tr').length;",
+            "expect": 3,
+        },
+        {"select": "table.leads tbody tr select", "value": "contacted"},
+        {
+            "label": "status saved",
+            "js": "await new Promise(r=>setTimeout(r,600)); const d=await (await fetch('/api/leads')).json(); return d.leads.filter(l=>l.status==='contacted').length;",
+            "expect": 1,
+        },
+        {"screenshot": str(shots / "lead-list.png")},
+        {"click": "table.leads tbody tr:nth-child(2) a.btn", "after": 1200},
+        {"expectText": "#main .notice", "contains": "Writing to lead"},
+        {"click": "#main form button[type=submit]", "after": 1500},
+        {"waitFor": ".result .drafts"},
+        {
+            "label": "three drafts",
+            "js": "return document.querySelectorAll('.result .draft').length;",
+            "expect": 3,
+        },
+        {"screenshot": str(shots / "outreach.png")},
+        nav("/t/search-performance/import"),
+        {"waitFor": "#main form"},
+        {"fill": "#main [name=site]", "value": "solar.example"},
+        {
+            "label": "attach a Search Console export to the real file input",
+            "js": f"const b=atob('{zip_b64}'); const u=new Uint8Array(b.length); for(let i=0;i<b.length;i++) u[i]=b.charCodeAt(i);"
+            "const dt=new DataTransfer(); dt.items.add(new File([u],'solar.example-Performance.zip',{type:'application/zip'}));"
+            "const i=document.querySelector('#main input[type=file]'); i.files=dt.files; return i.files.length;",
+            "expect": 1,
+        },
+        {"click": "#main form button[type=submit]", "after": 1500},
+        {"waitFor": ".result table"},
+        {"expectText": ".result", "contains": "6 queries and 3 pages"},
+        nav("/t/search-performance/opportunities"),
+        {"waitFor": "#main select option[value]"},
+        {"click": "#main form button[type=submit]", "after": 1500},
+        {"waitFor": ".result table"},
+        {
+            "label": "net metering is a striking-distance query",
+            "js": "return document.querySelector('.result').innerText.includes('net metering lahore');",
+        },
         {"audit": FORBID},
-        {"screenshot": str(shots / "site-audit.png")},
-        {"click": "button[data-key=dashboard]", "after": 900},
+        {"screenshot": str(shots / "opportunities.png")},
+        nav("/t/search-performance/changes"),
+        {"waitFor": "#main select option[value]"},
+        {"click": "#main form button[type=submit]", "after": 1500},
+        {"waitFor": ".result table"},
+        {"expectText": ".result h2", "contains": "Clicks 245"},
+        {"screenshot": str(shots / "changes.png")},
+        *run_sub(
+            "/t/content-studio/keywords",
+            {"seed": "solar lahore"},
+            ".result ul.plain",
+            "keywords.png",
+            shots,
+        ),
+        *run_sub("/t/content-studio/brief", {"topic": "solar lahore"}, ".result ul.plain"),
+        *run_sub(
+            "/t/content-studio/grade",
+            {"keyword": "solar", "url": "solar.example/prices"},
+            ".result .checks",
+        ),
+        nav("/t/content-studio/draft"),
+        {"waitFor": ".notice.warn"},
+        nav("/t/client-reports/clients"),
+        {"waitFor": "#panel .card"},
+        {"click": "#panel .card-head .btn.primary", "after": 600},
+        {"fill": "#panel [name=name]", "value": "Sun Power Lahore"},
+        {"fill": "#panel [name=website]", "value": "solar.example"},
+        {"fill": "#panel [name=city]", "value": "Lahore"},
+        {"fill": "#panel [name=brand]", "value": "Ayesha Digital"},
+        {
+            "label": "link the imported Search Console report",
+            "js": "await new Promise(r=>setTimeout(r,500)); const s=document.querySelector('#panel select[name=gsc_dataset]'); s.value=s.options[0].value; return !!s.value;",
+        },
+        {"click": "#panel form button[type=submit]", "after": 1200},
+        {"expectText": "#panel table", "contains": "Sun Power Lahore"},
+        {"click": "#panel table a.btn.primary", "after": 1000},
+        {"waitFor": "#main select option[value]"},
+        {"click": "#main form button[type=submit]", "after": 2500},
+        {"waitFor": ".result.report"},
+        {
+            "label": "the report has search numbers, fixes and the month's work",
+            "js": "const t=document.querySelector('.result.report').innerText; return ['Google search results','What to fix next','Work done this month','Sun Power Lahore'].every(x=>t.includes(x));",
+        },
+        {"audit": FORBID},
+        {"screenshot": str(shots / "client-report.png")},
+        nav("/t/site-audit"),
+        {"click": "button[data-key=dashboard]", "after": 1200},
         {"waitFor": ".chart-box svg"},
         {
-            "label": "bars drawn",
-            "js": "return document.querySelectorAll('.chart path.bar').length > 0;",
-        },
-        {
-            "label": "dashboard counts both runs",
-            "js": "return document.querySelectorAll('.tile .v')[1].textContent;",
-            "expect": "2",
-        },
-        {
-            "label": "score trend has a point per run",
-            "js": "return document.querySelectorAll('.chart circle.dot').length;",
-            "expect": 2,
+            "label": "dashboard lists every sub-tool with its runs",
+            "js": "return [...document.querySelectorAll('#panel table')[0].querySelectorAll('tbody tr')].map(r=>r.cells[0].innerText+':'+r.cells[1].innerText);",
+            "expect": ["Page Audit:2", "Site Crawl:1", "Local SEO Check:1"],
         },
         {"audit": FORBID},
         {"screenshot": str(shots / "dashboard.png")},
         {"click": "button[data-key=about]", "after": 300},
-        {"expectText": "[role=tabpanel]", "contains": "What Site Audit does"},
-        {"click": "a.item[href='/t/lead-finder']", "after": 600},
-        {
-            "label": "a tool that is not live opens on About",
-            "js": "return document.querySelector('.tabs [aria-selected=true]').textContent;",
-            "expect": "About",
-        },
-        {"click": "button[data-key=run]", "after": 500},
-        {"waitFor": ".notice.warn"},
-        {
-            "label": "a tool without an engine cannot be run",
-            "js": "return document.querySelector('#main form button[type=submit]').disabled;",
-        },
-        {"click": "a.item[href='/settings']", "after": 900},
+        {"expectText": "#panel", "contains": "What Site Audit does"},
+        nav("/settings"),
         {"waitFor": "#two-step .btn.primary"},
         {"click": "#two-step .btn.primary", "after": 700},
         {"waitFor": ".qr svg"},
-        {
-            "label": "QR code drew modules",
-            "js": "return document.querySelector('.qr svg path').getAttribute('d').length > 500;",
-        },
         {"screenshot": str(shots / "two-step-setup.png"), "of": "#two-step"},
         {
             "label": "enable 2-step with a code computed in the page",
@@ -172,29 +469,23 @@ def desktop_plan(base: str, shots: Path) -> dict:
         },
         {"click": "#two-step .head-actions .btn.primary", "after": 700},
         {"expectText": "#two-step", "contains": "2-step verification is on"},
-        {"expectNoEmpty": ["#sessions table"]},
-        {"expectText": "#github", "contains": "personal access token"},
         {"audit": FORBID},
-        {"screenshot": str(shots / "settings.png")},
         {
             "label": "dark theme",
             "js": "document.documentElement.dataset.theme='dark'; return true;",
         },
-        {"click": "a.item[href='/app']", "after": 900},
+        nav("/app"),
         {"waitFor": ".tile"},
         {"screenshot": str(shots / "overview-dark.png")},
-        {
-            "label": "light theme again",
-            "js": "document.documentElement.dataset.theme='light'; return true;",
-        },
         {
             "label": "sign out",
             "js": "[...document.querySelectorAll('.sidebar button')].find(b=>b.textContent.includes('Sign out')).click(); return true;",
             "after": 900,
         },
         {"expectText": "h1", "contains": "Sign in"},
-        {"screenshot": str(shots / "sign-in.png")},
-        *fill_and_submit({"email": email, "password": pw}),
+        {"fill": "input[name=email]", "value": email},
+        {"fill": "input[name=password]", "value": pw},
+        {"click": "form button[type=submit]", "after": 900},
         {"expectText": "h1", "contains": "2-step verification"},
         {
             "label": "sign in through 2-step",
@@ -210,35 +501,37 @@ def desktop_plan(base: str, shots: Path) -> dict:
 
 
 def mobile_plan(base: str, shots: Path) -> dict:
-    pw = "tall-orange-river-42"
     no_sideways = {
         "label": "no sideways scroll at phone width",
         "js": "return document.documentElement.scrollWidth <= window.innerWidth;",
     }
     steps = [
-        {"waitFor": "form"},
+        *auth_steps("Bilal", "bilal@example.com", "tall-orange-river-42"),
         no_sideways,
-        *fill_and_submit(
-            {"name": "Bilal", "email": "bilal@example.com", "password": pw, "confirm": pw}
-        ),
-        {"waitFor": ".topbar"},
-        no_sideways,
-        {"screenshot": str(shots / "mobile-overview.png")},
         {"click": ".topbar button", "after": 400},
         {
             "label": "menu opens the tool list",
             "js": "return document.querySelector('.shell').classList.contains('nav-open');",
         },
+        {"click": ".sidebar a[href='/t/site-audit']", "after": 700},
+        {"click": ".topbar button", "after": 400},
         {"screenshot": str(shots / "mobile-menu.png")},
-        {"click": "a.item[href='/t/site-audit']", "after": 600},
+        {"click": ".sidebar a[href='/t/site-audit/page']", "after": 700},
         {
-            "label": "choosing a tool closes the menu",
+            "label": "choosing a sub-tool closes the menu",
             "js": "return !document.querySelector('.shell').classList.contains('nav-open');",
         },
-        *fill_and_submit({"url": "bad.example"}, "#main form button[type=submit]"),
-        {"waitFor": ".checks"},
+        *fill_and_submit({"url": "bad.example"}),
+        {"waitFor": ".result .checks"},
         no_sideways,
         {"screenshot": str(shots / "mobile-audit.png")},
+        {
+            "js": "history.pushState({}, '', '/t/lead-finder/search'); dispatchEvent(new PopStateEvent('popstate')); return true;",
+            "after": 900,
+        },
+        *fill_and_submit({"trade": "dentists", "city": "Lahore"}),
+        {"waitFor": ".result table"},
+        no_sideways,
     ]
     return {"url": f"{base}/register", "settle": 900, "steps": steps}
 
@@ -251,11 +544,13 @@ def main() -> int:
     shots = ROOT / "docs"
     shots.mkdir(exist_ok=True)
     os.environ["RANKLOOM_QUIET"] = "1"
-    site_audit.audit.__defaults__ = (fetcher(PAGES),)
-    engines.ENGINES["site-audit"] = site_audit.run
+    os.environ.pop("RANKLOOM_AI", None)
+    sources.suggest = recorded_suggest
+    sources.places = recorded_places
     failed = 0
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as data:
         app = server.App(data, "http://127.0.0.1")
+        app.fetch = fixture_fetch
         srv = server.make_server(app, "127.0.0.1", 0)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         base = f"http://127.0.0.1:{srv.server_address[1]}"
@@ -271,11 +566,10 @@ def main() -> int:
                     capture_output=True,
                     text=True,
                     env={**os.environ, "UI_WIDTH": width},
-                    timeout=300,
+                    timeout=600,
                 )
-                report = (
-                    json.loads(proc.stdout or "{}") if proc.stdout.strip().startswith("{") else {}
-                )
+                out = proc.stdout.strip()
+                report = json.loads(out) if out.startswith("{") else {}
                 ok = proc.returncode == 0
                 failed += not ok
                 print(

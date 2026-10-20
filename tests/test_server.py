@@ -304,68 +304,337 @@ def test_the_totp_secret_is_sealed_in_the_database(app):
 # --- tools, runs, analytics ----------------------------------------------------------------
 
 
-def test_catalog_has_nine_tools_each_with_an_about(app):
+def test_catalog_has_six_tools_each_with_sub_tools_and_an_about(app):
     c = register(app)
     _, body, _ = c.get("/api/tools")
     tools = body["tools"]
-    assert len(tools) == 9
-    assert len({t["slug"] for t in tools}) == 9
+    assert [t["name"] for t in tools] == [
+        "Site Audit",
+        "AI Visibility",
+        "Lead Finder",
+        "Search Performance",
+        "Content Studio",
+        "Client Reports",
+    ]
+    runnable = set()
     for t in tools:
-        assert t["about"] and t["does"] and t["input"] and t["output"] and t["fields"]
-    live = {t["slug"] for t in tools if t["status"] == "live"}
-    assert live == set(engines.ENGINES)
+        assert t["about"] and len(t["subtools"]) >= 2
+        for sub in t["subtools"]:
+            assert sub["about"] and sub["does"] and sub["input"] and sub["output"], sub["slug"]
+            if sub["kind"] == "run":
+                runnable.add(f"{t['slug']}/{sub['slug']}")
+                assert sub["fields"], sub["slug"]
+    assert runnable == set(engines.ENGINES)  # every run form has an engine, and no engine hides
 
 
-def test_a_tool_without_an_engine_says_so_and_records_no_run(app):
+def test_a_sub_tool_needing_ai_says_how_to_set_it_up_and_records_no_run(app, monkeypatch):
+    monkeypatch.delenv("RANKLOOM_AI", raising=False)
     c = register(app)
-    st, body, _ = c.post("/api/tools/lead-finder/run", {"fields": {"trade": "x", "city": "y"}})
-    assert st == 409 and "being built" in body["error"]
+    _, body, _ = c.get("/api/tools")
+    answers = next(s for t in body["tools"] for s in t["subtools"] if s["slug"] == "answers")
+    assert answers["status"] == "needs-ai"
+    st, body, _ = c.post(
+        "/api/tools/ai-visibility/answers/run", {"fields": {"brand": "X", "niche": "dentist"}}
+    )
+    assert st == 409 and body["needs_ai"] and "RANKLOOM_AI" in body["error"]
     assert app.db.one("SELECT COUNT(*) FROM runs")[0] == 0
+
+
+def test_required_fields_are_checked_before_the_engine_runs(app, monkeypatch):
+    called = []
+    monkeypatch.setitem(server.ENGINES, "site-audit/page", lambda f, ctx: called.append(f))
+    c = register(app)
+    st, body, _ = c.post("/api/tools/site-audit/page/run", {"fields": {"url": ""}})
+    assert st == 400 and "Page address" in body["error"]
+    assert called == []
 
 
 def test_runs_feed_the_tool_dashboard_and_the_overview(app, monkeypatch):
     calls = []
 
-    def fake(fields):
+    def fake(fields, ctx):
         calls.append(fields)
         return f"{fields['url']} scored 70/100", 70, {"score": 70}
 
-    monkeypatch.setitem(engines.ENGINES, "site-audit", fake)
-    monkeypatch.setitem(server.ENGINES, "site-audit", fake)
+    monkeypatch.setitem(server.ENGINES, "site-audit/page", fake)
     c = register(app)
-    c.post("/api/events", {"tool": "site-audit", "kind": "open"})
-    c.post("/api/events", {"tool": "site-audit", "kind": "open"})  # within 30 s: one visit
+    c.post("/api/events", {"tool": "site-audit", "subtool": "page", "kind": "open"})
+    c.post("/api/events", {"tool": "site-audit", "subtool": "page", "kind": "open"})  # one visit
     for _ in range(2):
         st, body, _ = c.post(
-            "/api/tools/site-audit/run", {"fields": {"url": "example.com", "evil": "dropped"}}
+            "/api/tools/site-audit/page/run", {"fields": {"url": "example.com", "evil": "dropped"}}
         )
         assert st == 200 and body["score"] == 70
     assert calls[0] == {"url": "example.com"}  # unknown fields never reach the engine
     _, stats, _ = c.get("/api/tools/site-audit/stats")
     assert stats["opens"] == 1 and stats["runs"] == 2 and stats["ok"] == 2
-    assert stats["avg_score"] == 70
+    page = next(x for x in stats["subtools"] if x["slug"] == "page")
+    assert page["runs"] == 2 and page["avg_score"] == 70
+    assert {x["slug"] for x in stats["subtools"]} == {"page", "crawl", "local"}
     assert len(stats["daily"]) == 14 and stats["daily"][-1]["runs"] == 2
     _, dash, _ = c.get("/api/dashboard")
     row = next(t for t in dash["tools"] if t["slug"] == "site-audit")
     assert row["runs"] == 2 and row["opens"] == 1
-    assert len(dash["recent"]) == 2
+    assert dash["recent"][0]["subtool"] == "page"
 
 
 def test_a_refused_address_is_a_recorded_failed_run_not_a_crash(app):
     c = register(app)
-    st, body, _ = c.post("/api/tools/site-audit/run", {"fields": {"url": "http://127.0.0.1/"}})
+    st, body, _ = c.post("/api/tools/site-audit/page/run", {"fields": {"url": "http://127.0.0.1/"}})
     assert st == 422 and body["status"] == "error"
     _, stats, _ = c.get("/api/tools/site-audit/stats")
     assert stats["errors"] == 1
 
 
 def test_one_user_cannot_read_another_users_run(app, monkeypatch):
-    monkeypatch.setitem(server.ENGINES, "site-audit", lambda f: ("ok", 50, {"score": 50}))
+    monkeypatch.setitem(server.ENGINES, "site-audit/page", lambda f, ctx: ("ok", 50, {}))
     a = register(app)
-    _, run, _ = a.post("/api/tools/site-audit/run", {"fields": {"url": "example.com"}})
+    _, run, _ = a.post("/api/tools/site-audit/page/run", {"fields": {"url": "example.com"}})
     b = register(app, email="bilal@example.com", name="Bilal")
     assert b.get(f"/api/runs/{run['id']}")[0] == 404
     assert a.get(f"/api/runs/{run['id']}")[0] == 200
+
+
+def test_the_real_page_audit_runs_through_the_app_fetcher(app):
+    from test_site_audit import GOOD, fetcher
+
+    app.fetch = fetcher({"https://solar.example/": (200, GOOD, {}, "https://solar.example/", [])})
+    c = register(app)
+    st, body, _ = c.post("/api/tools/site-audit/page/run", {"fields": {"url": "solar.example"}})
+    assert st == 200
+    view = body["output"]["view"]
+    assert view["headline"]["score"] == body["score"]
+    assert [b["type"] for b in view["blocks"]] == ["facts", "checks"]
+
+
+# --- leads ---------------------------------------------------------------------------------
+
+
+def test_lead_csv_import_update_export_and_isolation(app):
+    c = register(app)
+    csv_text = (
+        "Business Name,Website,Phone,City\n"
+        "Smile Care,smilecare.example,0300-1234567,Lahore\n"
+        '=HYPERLINK("http://evil"),,,Karachi\n'
+        ",nobody.example,,\n"
+    )
+    st, body, _ = c.post("/api/leads/import", {"csv": csv_text})
+    assert st == 200 and body["added"] == 2 and body["skipped"] == 1
+    _, leads, _ = c.get("/api/leads")
+    names = {x["name"]: x for x in leads["leads"]}
+    assert names["Smile Care"]["phone"] == "0300-1234567"
+    assert names['=HYPERLINK("http://evil")']["problems"] == ["no website listed"]
+    lid = names["Smile Care"]["id"]
+    assert (
+        c.post("/api/leads/update", {"id": lid, "status": "contacted", "notes": "called"})[0] == 200
+    )
+    assert c.post("/api/leads/update", {"id": lid, "status": "hacked"})[0] == 400
+    st, raw, headers = c.get("/api/leads/export")
+    assert st == 200 and headers["Content-Type"].startswith("text/csv")
+    assert "'=HYPERLINK" in raw  # a formula cell is defused for Excel
+    assert "contacted" in raw and "called" in raw
+    other = register(app, email="bilal@example.com", name="Bilal")
+    assert other.get("/api/leads")[1]["leads"] == []
+    assert other.post("/api/leads/update", {"id": lid, "status": "won"})[0] == 404
+
+
+def test_business_search_saves_ranked_leads(app, monkeypatch):
+    from test_site_audit import BAD, fetcher
+
+    from rankloom import sources
+
+    monkeypatch.setattr(
+        sources,
+        "places",
+        lambda trade, city, limit=50, country="": [
+            {
+                "name": "No Site Dental",
+                "category": "dentist",
+                "website": "",
+                "phone": "0300",
+                "email": "",
+                "address": "",
+                "city": city,
+                "source": "osm",
+            },
+            {
+                "name": "Weak Site Dental",
+                "category": "dentist",
+                "website": "bad.example",
+                "phone": "",
+                "email": "",
+                "address": "",
+                "city": city,
+                "source": "osm",
+            },
+        ],
+    )
+    app.fetch = fetcher({"https://bad.example/": (200, BAD, {}, "https://bad.example/", [])})
+    c = register(app)
+    st, body, _ = c.post(
+        "/api/tools/lead-finder/search/run", {"fields": {"trade": "dentists", "city": "Lahore"}}
+    )
+    assert st == 200, body
+    out = body["output"]
+    assert out["found"] == 2 and out["with_site"] == 1 and out["audited"] == 1
+    # A weak site we checked outranks a business merely listed without one.
+    assert [x["name"] for x in out["leads"]] == ["Weak Site Dental", "No Site Dental"]
+    assert out["leads"][1]["problems"] == [
+        "website not listed in the directory (check before contacting)"
+    ]
+    _, leads, _ = c.get("/api/leads")
+    assert len(leads["leads"]) == 2
+    weak = next(x for x in leads["leads"] if x["website"])
+    assert any("not secure" in p or "phones" in p for p in weak["problems"])
+    st, body, _ = c.post(
+        "/api/tools/lead-finder/outreach/run", {"fields": {"lead": str(weak["id"])}}
+    )
+    assert st == 200
+    email = body["output"]["drafts"][0]["text"]
+    assert "Weak Site Dental" in email and "bad.example" in email
+
+
+# --- clients, Search Console, reports ------------------------------------------------------
+
+
+def gsc_zip(compare=True):
+    import base64
+    import io
+    import zipfile
+
+    if compare:
+        q = (
+            "Top queries,Last 28 days Clicks,Previous 28 days Clicks,Last 28 days Impressions,"
+            "Previous 28 days Impressions,Last 28 days CTR,Previous 28 days CTR,"
+            "Last 28 days Position,Previous 28 days Position\n"
+            "dentist lahore,40,60,2000,2100,2%,2.86%,4.1,3.2\n"
+            "teeth whitening price,2,1,900,800,0.22%,0.13%,12.5,15\n"
+            "root canal cost,0,3,700,650,0%,0.46%,9.8,8.9\n"
+        )
+        pg = (
+            "Top pages,Last 28 days Clicks,Previous 28 days Clicks,Last 28 days Impressions,"
+            "Previous 28 days Impressions,Last 28 days CTR,Previous 28 days CTR,"
+            "Last 28 days Position,Previous 28 days Position\n"
+            "https://smile.example/,30,50,2500,2600,1.2%,1.92%,5,4\n"
+            "https://smile.example/whitening,12,14,1100,950,1.09%,1.47%,11,13\n"
+        )
+    else:
+        q = "Top queries,Clicks,Impressions,CTR,Position\ndentist lahore,40,2000,2%,4.1\n"
+        pg = "Top pages,Clicks,Impressions,CTR,Position\nhttps://smile.example/,30,2500,1.2%,5\n"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("Queries.csv", "﻿" + q)
+        z.writestr("Pages.csv", pg)
+        z.writestr("Countries.csv", "Country,Clicks\nPakistan,40\n")
+    return [{"name": "export.zip", "data": base64.b64encode(buf.getvalue()).decode()}]
+
+
+def test_search_console_import_opportunities_and_changes(app):
+    c = register(app)
+    st, body, _ = c.post(
+        "/api/tools/search-performance/import/run",
+        {"fields": {"site": "smile.example", "files": gsc_zip()}},
+    )
+    assert st == 200, body
+    assert body["output"]["queries"] == 3 and body["output"]["pages"] == 2
+    did = body["output"]["dataset"]
+    _, opts, _ = c.get("/api/options/dataset")
+    assert opts["options"][0]["value"] == str(did)
+    st, body, _ = c.post(
+        "/api/tools/search-performance/opportunities/run", {"fields": {"dataset": str(did)}}
+    )
+    assert st == 200
+    striking = [r["key"] for r in body["output"]["striking"]]
+    assert "teeth whitening price" in striking and "dentist lahore" not in striking
+    low = [r["key"] for r in body["output"]["low_ctr"]]
+    assert "dentist lahore" in low  # 2% at position 4, where about 8% is typical
+    st, body, _ = c.post(
+        "/api/tools/search-performance/changes/run", {"fields": {"dataset": str(did)}}
+    )
+    assert st == 200
+    losers = [r["key"] for r in body["output"]["queries"]["losers"]]
+    assert losers[0] == "dentist lahore"  # 60 -> 40, the biggest drop
+    assert body["output"]["pages"]["now"]["clicks"] == 42
+
+
+def test_changes_needs_a_comparison_export(app):
+    c = register(app)
+    _, body, _ = c.post(
+        "/api/tools/search-performance/import/run",
+        {"fields": {"site": "s", "files": gsc_zip(compare=False)}},
+    )
+    did = body["output"]["dataset"]
+    st, body, _ = c.post(
+        "/api/tools/search-performance/changes/run", {"fields": {"dataset": str(did)}}
+    )
+    assert st == 422 and "Compare" in body["error"]
+
+
+def test_a_file_that_is_not_an_export_is_refused_with_how_to(app):
+    import base64
+
+    c = register(app)
+    files = [{"name": "x.csv", "data": base64.b64encode(b"a,b\n1,2\n").decode()}]
+    st, body, _ = c.post(
+        "/api/tools/search-performance/import/run", {"fields": {"site": "s", "files": files}}
+    )
+    assert st == 422 and "Download CSV" in body["error"]
+
+
+def test_clients_and_a_monthly_report(app):
+    from test_site_audit import GOOD, fetcher
+
+    app.fetch = fetcher({"https://solar.example/": (200, GOOD, {}, "https://solar.example/", [])})
+    c = register(app)
+    _, imp, _ = c.post(
+        "/api/tools/search-performance/import/run",
+        {"fields": {"site": "solar.example", "files": gsc_zip()}},
+    )
+    st, body, _ = c.post(
+        "/api/clients/save",
+        {
+            "name": "Sun Power",
+            "website": "solar.example",
+            "city": "Lahore",
+            "brand": "Ayesha Digital",
+            "gsc_dataset": imp["output"]["dataset"],
+        },
+    )
+    assert st == 200
+    cid = body["id"]
+    _, audit_run, _ = c.post("/api/tools/site-audit/page/run", {"fields": {"url": "solar.example"}})
+    _, opts, _ = c.get("/api/options/client")
+    assert opts["options"] == [{"value": str(cid), "label": "Sun Power"}]
+    st, body, _ = c.post("/api/tools/client-reports/report/run", {"fields": {"client": str(cid)}})
+    assert st == 200, body
+    out = body["output"]
+    assert out["audit"]["score"] == audit_run["score"]  # same page, same checks, same score
+    assert out["gsc"]["now"]["clicks"] == 42
+    assert any("solar.example" in w for w in out["work"])
+    titles = [b["title"] for b in out["view"]["blocks"]]
+    assert "Google search results" in titles and "Work done this month" in titles
+    _, cl, _ = c.get("/api/clients")
+    assert cl["clients"][0]["last_report_id"] == body["id"]
+    other = register(app, email="bilal@example.com", name="Bilal")
+    st, _, _ = other.post("/api/tools/client-reports/report/run", {"fields": {"client": str(cid)}})
+    assert st == 422
+
+
+def test_a_client_cannot_point_at_someone_elses_report(app):
+    a = register(app)
+    _, imp, _ = a.post(
+        "/api/tools/search-performance/import/run", {"fields": {"site": "s", "files": gsc_zip()}}
+    )
+    b = register(app, email="bilal@example.com", name="Bilal")
+    st, _, _ = b.post("/api/clients/save", {"name": "X", "gsc_dataset": imp["output"]["dataset"]})
+    assert st == 400
+
+
+def test_an_oversized_request_gets_413_not_a_reset(app):
+    c = register(app)
+    big = "x" * (server.MAX_BODY + 10)
+    st, body, _ = c.post("/api/account/profile", {"name": big})
+    assert st == 413
 
 
 # --- GitHub --------------------------------------------------------------------------------

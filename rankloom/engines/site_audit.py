@@ -11,12 +11,24 @@ from collections.abc import Callable
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit
 
+from .. import robots
 from ..netguard import FetchFailed, FetchRefused, Response, safe_fetch
+from .common import (
+    FAIL,
+    PASS,
+    WARN,
+    Context,
+    check,
+    headline,
+    score_checks,
+    sort_checks,
+    view,
+)
+from .common import checks as checks_block
+from .common import facts as facts_block
 
 Fetch = Callable[[str], Response]
-
-PASS, WARN, FAIL = "pass", "warn", "fail"
-CREDIT = {PASS: 1.0, WARN: 0.5, FAIL: 0.0}
+MAX_TEXT = 200_000
 
 
 class _Page(HTMLParser):
@@ -30,6 +42,9 @@ class _Page(HTMLParser):
         self.images: list[dict[str, str | None]] = []
         self.anchors: list[str] = []
         self.jsonld: list[str] = []
+        self.iframes: list[str] = []
+        self.text_parts: list[str] = []
+        self._text_len = 0
         self.words = 0
         self._stack: list[str] = []
         self._buf: list[str] = []
@@ -50,6 +65,10 @@ class _Page(HTMLParser):
             self.images.append({"src": a.get("src"), "alt": a["alt"] if "alt" in a else None})
         elif tag == "a" and a.get("href"):
             self.anchors.append(a["href"])
+        elif tag == "iframe" and a.get("src"):
+            self.iframes.append(a["src"])
+        if tag in ("p", "br", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6", "tr", "section"):
+            self.text_parts.append("\n")
         if tag in ("title", "h1", "h2", "h3", "h4", "h5", "h6") or (
             tag == "script" and a.get("type", "").lower() == "application/ld+json"
         ):
@@ -77,6 +96,15 @@ class _Page(HTMLParser):
             self._buf.append(data)
         if not self._stack:
             self.words += len(data.split())
+            if self._text_len < MAX_TEXT:
+                self.text_parts.append(data)
+                self._text_len += len(data)
+
+    @property
+    def text(self) -> str:
+        """Visible text, with block boundaries kept as line breaks."""
+        lines = (" ".join(line.split()) for line in "".join(self.text_parts).splitlines())
+        return "\n".join(line for line in lines if line)
 
 
 def normalise_url(raw: str) -> str:
@@ -91,15 +119,34 @@ def normalise_url(raw: str) -> str:
     return raw
 
 
-def _check(cid: str, label: str, status: str, detail: str, fix: str = "", weight: int = 1):
-    return {
-        "id": cid,
-        "label": label,
-        "status": status,
-        "detail": detail,
-        "fix": "" if status == PASS else fix,
-        "weight": weight,
-    }
+_check = check
+
+
+def parse_page(html: str) -> _Page:
+    page = _Page()
+    page.feed(html)
+    page.close()
+    return page
+
+
+def jsonld_objects(blocks: list[str]) -> list[dict]:
+    """Every JSON-LD object on the page, @graph members included, as flat dicts."""
+    out: list[dict] = []
+    for block in blocks:
+        try:
+            data = json.loads(block)
+        except ValueError:
+            continue
+        stack = [data]
+        while stack:
+            item = stack.pop()
+            if isinstance(item, list):
+                stack.extend(item)
+            elif isinstance(item, dict):
+                out.append(item)
+                if isinstance(item.get("@graph"), list):
+                    stack.extend(item["@graph"])
+    return out
 
 
 def _jsonld_types(blocks: list[str]) -> tuple[list[str], int]:
@@ -127,18 +174,7 @@ def _jsonld_types(blocks: list[str]) -> tuple[list[str], int]:
 
 
 def _robots_blocks_all(text: str) -> bool:
-    agent_star = False
-    for line in text.splitlines():
-        line = line.split("#")[0].strip()
-        if ":" not in line:
-            continue
-        key, value = (s.strip() for s in line.split(":", 1))
-        key = key.lower()
-        if key == "user-agent":
-            agent_star = value == "*"
-        elif key == "disallow" and agent_star and value == "/":
-            return True
-    return False
+    return robots.blocked(text, "*")
 
 
 def audit(url: str, fetch: Fetch = safe_fetch) -> dict:
@@ -226,9 +262,7 @@ def audit(url: str, fetch: Fetch = safe_fetch) -> dict:
         )
         return _finish(url, resp, checks, None)
 
-    page = _Page()
-    page.feed(resp.text())
-    page.close()
+    page = parse_page(resp.text())
 
     title = page.title or ""
     checks.append(
@@ -411,7 +445,7 @@ def audit(url: str, fetch: Fetch = safe_fetch) -> dict:
             2,
         )
     )
-    sitemap = any(line.lower().startswith("sitemap:") for line in robots_text.splitlines())
+    sitemap = bool(robots.sitemaps(robots_text))
     if not sitemap:
         try:
             sitemap = fetch(origin + "/sitemap.xml").status == 200
@@ -444,12 +478,7 @@ def audit(url: str, fetch: Fetch = safe_fetch) -> dict:
 
 
 def _finish(url: str, resp: Response, checks: list[dict], facts: dict | None) -> dict:
-    total = sum(c["weight"] for c in checks)
-    got = sum(c["weight"] * CREDIT[c["status"]] for c in checks)
-    score = round(100 * got / total) if total else 0
-    order = {FAIL: 0, WARN: 1, PASS: 2}
-    checks.sort(key=lambda c: (order[c["status"]], -c["weight"]))
-    counts = {s: sum(1 for c in checks if c["status"] == s) for s in (PASS, WARN, FAIL)}
+    score, counts = score_checks(checks)
     return {
         "url": url,
         "final_url": resp.url,
@@ -457,15 +486,45 @@ def _finish(url: str, resp: Response, checks: list[dict], facts: dict | None) ->
         "elapsed_ms": resp.elapsed_ms,
         "score": score,
         "counts": counts,
-        "checks": checks,
+        "checks": sort_checks(checks),
         "facts": facts,
     }
 
 
-def run(fields: dict) -> tuple[str, int | None, dict]:
-    result = audit(str(fields.get("url", "")))
+def audit_view(result: dict) -> dict:
+    f = result["facts"]
+    fact_block = (
+        facts_block(
+            "What the page says about itself",
+            [
+                ("Title", f["title"] or "-"),
+                ("Description", f["description"] or "-"),
+                ("H1", " | ".join(f["h1"]) or "-"),
+                ("Words", f"{f['words']:,}"),
+                ("Links in / out", f"{f['links_internal']} / {f['links_external']}"),
+                ("Structured data", ", ".join(f["schema_types"]) or "none"),
+            ],
+        )
+        if f
+        else None
+    )
+    return view(
+        headline(
+            result["final_url"],
+            f"Answered {result['status']} in {result['elapsed_ms']} ms",
+            result["score"],
+            result["counts"],
+        ),
+        fact_block,
+        checks_block("Checks", result["checks"], "Failures first, then warnings, heaviest first"),
+    )
+
+
+def run(fields: dict, ctx: Context | None = None) -> tuple[str, int | None, dict]:
+    fetch = ctx.fetch if ctx else None
+    result = audit(str(fields.get("url", "")), **({"fetch": fetch} if fetch else {}))
     c = result["counts"]
     summary = (
         f"{result['final_url']} scored {result['score']}/100 - {c['fail']} fail, {c['warn']} warn"
     )
-    return summary, result["score"], result
+    return summary, result["score"], {**result, "view": audit_view(result)}

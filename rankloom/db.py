@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS events (
     id       INTEGER PRIMARY KEY,
     user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     tool     TEXT NOT NULL,
+    subtool  TEXT NOT NULL DEFAULT '',
     kind     TEXT NOT NULL,          -- open | run
     at       INTEGER NOT NULL
 );
@@ -56,6 +57,7 @@ CREATE TABLE IF NOT EXISTS runs (
     id           INTEGER PRIMARY KEY,
     user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     tool         TEXT NOT NULL,
+    subtool      TEXT NOT NULL DEFAULT '',
     created_at   INTEGER NOT NULL,
     status       TEXT NOT NULL,      -- ok | error
     duration_ms  INTEGER NOT NULL,
@@ -76,6 +78,46 @@ CREATE TABLE IF NOT EXISTS imports (
     private         INTEGER NOT NULL DEFAULT 0,
     imported_at     INTEGER NOT NULL,
     UNIQUE(user_id, repo)
+);
+CREATE TABLE IF NOT EXISTS leads (
+    id          INTEGER PRIMARY KEY,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    category    TEXT NOT NULL DEFAULT '',
+    website     TEXT NOT NULL DEFAULT '',
+    phone       TEXT NOT NULL DEFAULT '',
+    email       TEXT NOT NULL DEFAULT '',
+    address     TEXT NOT NULL DEFAULT '',
+    city        TEXT NOT NULL DEFAULT '',
+    source      TEXT NOT NULL DEFAULT '',
+    score       INTEGER,                 -- higher = more to gain from our help
+    problems    TEXT NOT NULL DEFAULT '[]',
+    status      TEXT NOT NULL DEFAULT 'new',
+    notes       TEXT NOT NULL DEFAULT '',
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    UNIQUE(user_id, name, website)
+);
+CREATE TABLE IF NOT EXISTS gsc_datasets (
+    id           INTEGER PRIMARY KEY,
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    site         TEXT NOT NULL,
+    label        TEXT NOT NULL,
+    uploaded_at  INTEGER NOT NULL,
+    data_json    TEXT NOT NULL           -- {"queries": [...], "pages": [...], "compare": bool}
+);
+CREATE TABLE IF NOT EXISTS clients (
+    id          INTEGER PRIMARY KEY,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    website     TEXT NOT NULL DEFAULT '',
+    contact     TEXT NOT NULL DEFAULT '',
+    brand       TEXT NOT NULL DEFAULT '',
+    city        TEXT NOT NULL DEFAULT '',
+    niche       TEXT NOT NULL DEFAULT '',
+    notes       TEXT NOT NULL DEFAULT '',
+    gsc_dataset INTEGER,
+    created_at  INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS outbox (
     id          INTEGER PRIMARY KEY,
@@ -102,7 +144,16 @@ class Database:
             # An in-memory database exists per connection, so tests share one.
             self._shared = self._open()
         with self.connect() as c:
+            self._migrate(c)
             c.executescript(SCHEMA)
+
+    @staticmethod
+    def _migrate(c: sqlite3.Connection) -> None:
+        """Columns added after a database was first created."""
+        for table, column in (("runs", "subtool"), ("events", "subtool")):
+            cols = {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
+            if cols and column not in cols:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
 
     def _open(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)

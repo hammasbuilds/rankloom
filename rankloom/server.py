@@ -18,7 +18,9 @@ Security decisions, in one place:
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
+import io
 import json
 import mimetypes
 import os
@@ -34,11 +36,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import github, mail, security
+from . import ai, github, mail, security, sources
 from .db import Database, now
-from .engines import ENGINES
-from .netguard import FetchFailed, FetchRefused
-from .tools import BY_SLUG, public_catalog
+from .engines import ENGINES, search_perf
+from .engines.common import Context, InputProblem
+from .netguard import FetchFailed, FetchRefused, safe_fetch
+from .tools import BY_SLUG, find, public_catalog
+from .tools import status as tool_status
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -47,6 +51,18 @@ SESSION_TTL = 14 * 86400
 PENDING_TTL = 10 * 60
 RESET_TTL = 3600
 MAX_BODY = 64 * 1024
+MAX_UPLOAD = 12 * 1024 * 1024  # a Search Console zip or a lead CSV, base64-encoded
+LEAD_STATUSES = ["new", "contacted", "replied", "won", "lost"]
+RUN_ERRORS = (FetchRefused, FetchFailed, InputProblem, ai.AIUnavailable, sources.SourceFailed)
+LEAD_COLUMNS = {
+    "name": ("name", "business", "business name", "company", "title"),
+    "website": ("website", "site", "url", "web", "domain"),
+    "phone": ("phone", "telephone", "phone number", "mobile", "contact number"),
+    "email": ("email", "e-mail", "email address"),
+    "address": ("address", "street", "full address", "location"),
+    "city": ("city", "town"),
+    "category": ("category", "type", "trade", "industry"),
+}
 EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,255}\.[^@\s]{2,}$")
 
 CSP = (
@@ -89,6 +105,7 @@ class App:
         self.box = security.SealedBox(self._app_key())
         self.base_url = base_url.rstrip("/")
         self.secure_cookies = secure_cookies
+        self.fetch = safe_fetch  # replaced in tests and in the offline browser walk
 
     def _app_key(self) -> bytes:
         env = os.environ.get("RANKLOOM_SECRET", "")
@@ -166,6 +183,42 @@ class App:
         if self.secure_cookies:
             parts.append("Secure")
         return "; ".join(parts)
+
+
+def _csv_safe(value) -> str:
+    """A cell a spreadsheet will not run: leading = + - @ start a formula in Excel."""
+    v = "" if value is None else str(value)
+    return "'" + v if v[:1] in ("=", "+", "-", "@", "\t", "\r") else v
+
+
+def import_leads(db, user_id: int, text: str) -> tuple[int, int]:
+    from .engines.leads import save_lead
+
+    text = text.lstrip("\ufeff")
+    if not text.strip():
+        raise InputProblem("The file is empty.")
+    reader = csv.DictReader(io.StringIO(text))
+    header = {h.strip().lower(): h for h in (reader.fieldnames or [])}
+    cols = {
+        field: next((header[a] for a in aliases if a in header), None)
+        for field, aliases in LEAD_COLUMNS.items()
+    }
+    if not cols["name"]:
+        raise InputProblem("The CSV needs a name (or business) column.")
+    added = skipped = 0
+    for row in reader:
+        lead = {k: str(row.get(c) or "").strip() for k, c in cols.items() if c}
+        if not lead.get("name"):
+            skipped += 1
+            continue
+        lead["source"] = "CSV import"
+        lead["problems"] = [] if lead.get("website") else ["no website listed"]
+        lead["opportunity"] = None if lead.get("website") else 90
+        save_lead(db, user_id, lead)
+        added += 1
+        if added >= 5000:
+            break
+    return added, skipped
 
 
 def user_view(s) -> dict:
@@ -249,11 +302,23 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def body(self) -> dict:
-        length = int(self.headers.get("Content-Length") or 0)
-        if length > MAX_BODY:
+    def read_body(self) -> None:
+        """Read the whole body before anything can refuse the request. A reply sent while the
+        client is still sending makes Windows reset the connection, and the client then sees a
+        reset instead of the 403 or 413 it was given."""
+        try:
+            length = max(0, int(self.headers.get("Content-Length") or 0))
+        except ValueError as exc:
+            raise ApiError(400, "Bad Content-Length.") from exc
+        if length > MAX_UPLOAD:
+            self.close_connection = True
             raise ApiError(413, "The request is too large.")
-        raw = self.rfile.read(length) if length else b""
+        self._raw = self.rfile.read(length) if length else b""
+
+    def body(self, limit: int = MAX_BODY) -> dict:
+        raw = getattr(self, "_raw", b"")
+        if len(raw) > limit:
+            raise ApiError(413, "The request is too large.")
         if not raw:
             return {}
         try:
@@ -294,6 +359,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _dispatch(self, method: str):
+        self._raw = b""
         url = urlsplit(self.path)
         path = url.path
         try:
@@ -307,6 +373,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_static(rel[len("static/") :])
                 return self.send_static("index.html")
             if method == "POST":
+                self.read_body()
                 self.check_csrf()
             route = ROUTES.get((method, path))
             if route is not None:
@@ -649,84 +716,120 @@ class Handler(BaseHTTPRequestHandler):
 
     def tools(self):
         self.need_session()
-        self.send_json(200, {"tools": public_catalog()})
+        self.send_json(200, {"tools": public_catalog(), "ai": ai.engine() is not None})
 
     def event(self):
         s = self.need_session()
         b = self.body()
-        tool = str(b.get("tool", ""))
-        if tool not in BY_SLUG or b.get("kind") != "open":
+        tool, sub = str(b.get("tool", "")), str(b.get("subtool", ""))
+        if tool not in BY_SLUG or b.get("kind") != "open" or (sub and not find(tool, sub)):
             raise ApiError(400, "Unknown tool or event.")
         recent = self.app.db.one(
-            "SELECT 1 FROM events WHERE user_id = ? AND tool = ? AND kind = 'open' AND at > ?",
+            "SELECT 1 FROM events WHERE user_id = ? AND tool = ? AND subtool = ? AND "
+            "kind = 'open' AND at > ?",
             s["user_id"],
             tool,
+            sub,
             now() - 30,
         )
         if not recent:  # a reload storm is one visit, not twenty
             self.app.db.run(
-                "INSERT INTO events (user_id, tool, kind, at) VALUES (?, ?, 'open', ?)",
+                "INSERT INTO events (user_id, tool, subtool, kind, at) VALUES (?, ?, ?, 'open', ?)",
                 s["user_id"],
                 tool,
+                sub,
                 now(),
             )
         self.send_json(200, {"ok": True})
 
-    def run_tool(self, slug: str):
+    @staticmethod
+    def _clean_fields(sub: dict, raw: dict) -> dict:
+        out: dict = {}
+        for f in sub["fields"]:
+            v = raw.get(f["name"])
+            if v is None:
+                continue
+            if f["type"] == "file":
+                if not isinstance(v, list):
+                    raise ApiError(400, "Files must be a list.")
+                out[f["name"]] = [
+                    {"name": str(x.get("name", ""))[:200], "data": str(x.get("data", ""))}
+                    for x in v[:10]
+                    if isinstance(x, dict)
+                ]
+            elif f["type"] == "textarea":
+                out[f["name"]] = str(v)[:40_000]
+            else:
+                out[f["name"]] = str(v)[:500]
+        return out
+
+    def run_tool(self, slug: str, subslug: str):
         s = self.need_session()
-        tool = BY_SLUG.get(slug)
-        if tool is None:
+        hit = find(slug, subslug)
+        if hit is None:
             raise ApiError(404, "No such tool.")
-        engine = ENGINES.get(slug)
+        tool, sub = hit
+        engine = ENGINES.get(f"{slug}/{subslug}")
         if engine is None:
-            raise ApiError(
-                409,
-                f"{tool['name']} is not running yet - its engine is being built. "
-                "The page and its dashboard are ready for when it is.",
-            )
+            raise ApiError(409, f"{sub['name']} is a page, not something to run.")
+        if tool_status(sub) == "needs-ai":
+            raise ApiError(409, ai.SETUP_HINT, needs_ai=True)
         if self.app.limited("run-user", str(s["user_id"])):
             raise ApiError(429, "That is a lot of runs in ten minutes. Wait a little.")
-        fields = self.body().get("fields", {})
-        if not isinstance(fields, dict):
+        has_file = any(f["type"] == "file" for f in sub["fields"])
+        raw = self.body(limit=MAX_UPLOAD if has_file else MAX_BODY).get("fields", {})
+        if not isinstance(raw, dict):
             raise ApiError(400, "Fields must be an object.")
-        fields = {
-            k: str(v)[:500] for k, v in fields.items() if k in {f["name"] for f in tool["fields"]}
-        }
+        fields = self._clean_fields(sub, raw)
+        missing = [
+            f["label"] for f in sub["fields"] if f.get("required") and not fields.get(f["name"])
+        ]
+        if missing:
+            raise ApiError(400, f"Fill in: {', '.join(missing)}.")
         started = time.monotonic()
+        ctx = Context(s["user_id"], self.app.db, self.app.fetch)
         try:
-            summary, score, output = engine(fields)
+            summary, score, output = engine(fields, ctx)
             status = "ok"
-        except (FetchRefused, FetchFailed) as exc:
+        except RUN_ERRORS as exc:
             summary, score, output, status = str(exc), None, {"error": str(exc)}, "error"
         ms = int((time.monotonic() - started) * 1000)
+        stored_input = {
+            k: (f"{len(v)} file(s)" if isinstance(v, list) else v) for k, v in fields.items()
+        }
         cur = self.app.db.run(
-            "INSERT INTO runs (user_id, tool, created_at, status, duration_ms, summary, score, "
-            "input_json, output_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO runs (user_id, tool, subtool, created_at, status, duration_ms, summary, "
+            "score, input_json, output_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             s["user_id"],
             slug,
+            subslug,
             now(),
             status,
             ms,
             summary[:300],
             score,
-            json.dumps(fields),
+            json.dumps(stored_input),
             json.dumps(output),
         )
         self.app.db.run(
-            "INSERT INTO events (user_id, tool, kind, at) VALUES (?, ?, 'run', ?)",
+            "INSERT INTO events (user_id, tool, subtool, kind, at) VALUES (?, ?, ?, 'run', ?)",
             s["user_id"],
             slug,
+            subslug,
             now(),
         )
         self.send_json(
             200 if status == "ok" else 422,
             {
                 "id": cur.lastrowid,
+                "tool": slug,
+                "subtool": subslug,
                 "status": status,
                 "summary": summary,
                 "score": score,
                 "duration_ms": ms,
                 "output": output,
+                "created_at": now(),
                 **({"error": summary} if status == "error" else {}),
             },
         )
@@ -736,7 +839,7 @@ class Handler(BaseHTTPRequestHandler):
         if slug not in BY_SLUG:
             raise ApiError(404, "No such tool.")
         rows = self.app.db.all(
-            "SELECT id, created_at, status, duration_ms, summary, score FROM runs "
+            "SELECT id, subtool, created_at, status, duration_ms, summary, score FROM runs "
             "WHERE user_id = ? AND tool = ? ORDER BY id DESC LIMIT 50",
             s["user_id"],
             slug,
@@ -758,6 +861,7 @@ class Handler(BaseHTTPRequestHandler):
                     for k in (
                         "id",
                         "tool",
+                        "subtool",
                         "created_at",
                         "status",
                         "duration_ms",
@@ -790,7 +894,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def tool_stats(self, slug: str):
         s = self.need_session()
-        if slug not in BY_SLUG:
+        tool = BY_SLUG.get(slug)
+        if tool is None:
             raise ApiError(404, "No such tool.")
         uid = s["user_id"]
         opens = self.app.db.one(
@@ -800,14 +905,39 @@ class Handler(BaseHTTPRequestHandler):
         )[0]
         agg = self.app.db.one(
             "SELECT COUNT(*) AS runs, SUM(status = 'ok') AS ok, SUM(status = 'error') AS errors, "
-            "AVG(score) AS avg_score, MAX(score) AS best, AVG(duration_ms) AS avg_ms, "
-            "MAX(created_at) AS last_run FROM runs WHERE user_id = ? AND tool = ?",
+            "AVG(duration_ms) AS avg_ms, MAX(created_at) AS last_run FROM runs "
+            "WHERE user_id = ? AND tool = ?",
             uid,
             slug,
         )
+        per_sub = {
+            r["subtool"]: r
+            for r in self.app.db.all(
+                "SELECT subtool, COUNT(*) AS runs, SUM(status = 'ok') AS ok, "
+                "AVG(score) AS avg_score, "
+                "MAX(created_at) AS last FROM runs WHERE user_id = ? AND tool = ? GROUP BY subtool",
+                uid,
+                slug,
+            )
+        }
+        subs = []
+        for sub in tool["subtools"]:
+            r = per_sub.get(sub["slug"])
+            subs.append(
+                {
+                    "slug": sub["slug"],
+                    "name": sub["name"],
+                    "runs": r["runs"] if r else 0,
+                    "ok": (r["ok"] or 0) if r else 0,
+                    "avg_score": round(r["avg_score"])
+                    if r and r["avg_score"] is not None
+                    else None,
+                    "last": r["last"] if r else None,
+                }
+            )
         scores = self.app.db.all(
-            "SELECT created_at, score, summary FROM runs WHERE user_id = ? AND tool = ? AND "
-            "score IS NOT NULL ORDER BY id DESC LIMIT 20",
+            "SELECT subtool, created_at, score, summary FROM runs WHERE user_id = ? AND tool = ? "
+            "AND score IS NOT NULL ORDER BY id DESC LIMIT 20",
             uid,
             slug,
         )
@@ -818,10 +948,9 @@ class Handler(BaseHTTPRequestHandler):
                 "runs": agg["runs"] or 0,
                 "ok": agg["ok"] or 0,
                 "errors": agg["errors"] or 0,
-                "avg_score": round(agg["avg_score"]) if agg["avg_score"] is not None else None,
-                "best_score": agg["best"],
                 "avg_ms": round(agg["avg_ms"]) if agg["avg_ms"] is not None else None,
                 "last_run": agg["last_run"],
+                "subtools": subs,
                 "daily": self._daily(uid, slug),
                 "scores": [dict(r) for r in reversed(scores)],
             },
@@ -830,41 +959,255 @@ class Handler(BaseHTTPRequestHandler):
     def dashboard(self):
         s = self.need_session()
         uid = s["user_id"]
+        catalog = public_catalog()
         per = {
             t["slug"]: {
                 "slug": t["slug"],
                 "name": t["name"],
-                "status": t["status"],
+                "subtools": len(t["subtools"]),
                 "opens": 0,
                 "runs": 0,
                 "last": None,
             }
-            for t in public_catalog()
+            for t in catalog
         }
         for r in self.app.db.all(
-            "SELECT tool, kind, COUNT(*) AS n, MAX(at) AS last FROM events WHERE user_id = ? "
-            "GROUP BY tool, kind",
+            "SELECT tool, kind, COUNT(*) AS n, MAX(at) AS last FROM events "
+            "WHERE user_id = ? GROUP BY tool, kind",
             uid,
         ):
             if r["tool"] in per:
                 per[r["tool"]]["opens" if r["kind"] == "open" else "runs"] = r["n"]
-                last = per[r["tool"]]["last"]
-                per[r["tool"]]["last"] = max(last or 0, r["last"])
+                per[r["tool"]]["last"] = max(per[r["tool"]]["last"] or 0, r["last"])
         recent = self.app.db.all(
-            "SELECT id, tool, created_at, status, summary, score FROM runs WHERE user_id = ? "
-            "ORDER BY id DESC LIMIT 8",
+            "SELECT id, tool, subtool, created_at, status, summary, score "
+            "FROM runs WHERE user_id = ? ORDER BY id DESC LIMIT 8",
             uid,
         )
-        imports = self.app.db.one("SELECT COUNT(*) FROM imports WHERE user_id = ?", uid)[0]
+        count = lambda sql: self.app.db.one(sql, uid)[0]  # noqa: E731
         self.send_json(
             200,
             {
                 "tools": list(per.values()),
                 "daily": self._daily(uid, None),
                 "recent": [dict(r) for r in recent],
-                "imports": imports,
+                "imports": count("SELECT COUNT(*) FROM imports WHERE user_id = ?"),
+                "leads": count("SELECT COUNT(*) FROM leads WHERE user_id = ?"),
+                "clients": count("SELECT COUNT(*) FROM clients WHERE user_id = ?"),
+                "ai": ai.engine() is not None,
             },
         )
+
+    # --- options for select fields --------------------------------------------------------------
+
+    def options(self, kind: str):
+        s = self.need_session()
+        if kind == "dataset":
+            opts = search_perf.dataset_options(self.app.db, s["user_id"])
+        elif kind == "client":
+            opts = [
+                {"value": str(r["id"]), "label": r["name"]}
+                for r in self.app.db.all(
+                    "SELECT id, name FROM clients WHERE user_id = ? ORDER BY name", s["user_id"]
+                )
+            ]
+        else:
+            raise ApiError(404, "No such list.")
+        self.send_json(200, {"options": opts})
+
+    # --- leads ----------------------------------------------------------------------------------
+
+    def leads_list(self):
+        s = self.need_session()
+        rows = self.app.db.all(
+            "SELECT * FROM leads WHERE user_id = ? ORDER BY "
+            "CASE status WHEN 'new' THEN 0 WHEN 'contacted' THEN 1 "
+            "WHEN 'replied' THEN 2 WHEN 'won' THEN 3 ELSE 4 END, "
+            "score DESC, id DESC LIMIT 2000",
+            s["user_id"],
+        )
+        self.send_json(
+            200,
+            {
+                "leads": [
+                    {
+                        **{k: r[k] for k in r.keys() if k not in ("user_id", "problems")},
+                        "problems": json.loads(r["problems"]),
+                    }
+                    for r in rows
+                ],
+                "statuses": LEAD_STATUSES,
+            },
+        )
+
+    def lead_update(self):
+        s = self.need_session()
+        b = self.body()
+        lid = b.get("id")
+        if not isinstance(lid, int):
+            raise ApiError(400, "Unknown lead.")
+        sets, args = [], []
+        if "status" in b:
+            if b["status"] not in LEAD_STATUSES:
+                raise ApiError(400, "Unknown status.")
+            sets.append("status = ?")
+            args.append(b["status"])
+        if "notes" in b:
+            sets.append("notes = ?")
+            args.append(str(b["notes"])[:4000])
+        if not sets:
+            raise ApiError(400, "Nothing to change.")
+        n = self.app.db.run(
+            f"UPDATE leads SET {', '.join(sets)}, updated_at = ? WHERE id = ? AND user_id = ?",
+            *args,
+            now(),
+            lid,
+            s["user_id"],
+        ).rowcount
+        if not n:
+            raise ApiError(404, "Unknown lead.")
+        self.send_json(200, {"ok": True})
+
+    def lead_delete(self):
+        s = self.need_session()
+        lid = self.body().get("id")
+        if not isinstance(lid, int):
+            raise ApiError(400, "Unknown lead.")
+        self.app.db.run("DELETE FROM leads WHERE id = ? AND user_id = ?", lid, s["user_id"])
+        self.send_json(200, {"ok": True})
+
+    def lead_import(self):
+        s = self.need_session()
+        text = str(self.body(limit=MAX_UPLOAD).get("csv", ""))
+        try:
+            added, skipped = import_leads(self.app.db, s["user_id"], text)
+        except InputProblem as exc:
+            raise ApiError(400, str(exc)) from exc
+        self.send_json(200, {"ok": True, "added": added, "skipped": skipped})
+
+    def lead_export(self):
+        s = self.need_session()
+        rows = self.app.db.all("SELECT * FROM leads WHERE user_id = ? ORDER BY id", s["user_id"])
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        cols = [
+            "name",
+            "category",
+            "website",
+            "phone",
+            "email",
+            "address",
+            "city",
+            "status",
+            "score",
+            "notes",
+            "source",
+        ]
+        w.writerow(cols + ["problems"])
+        for r in rows:
+            w.writerow(
+                [_csv_safe(r[c]) for c in cols] + [_csv_safe("; ".join(json.loads(r["problems"])))]
+            )
+        data = buf.getvalue().encode("utf-8-sig")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header("Content-Disposition", 'attachment; filename="rankloom-leads.csv"')
+        self.send_header("Content-Length", str(len(data)))
+        self._headers_common()
+        self.end_headers()
+        self.wfile.write(data)
+
+    # --- clients and reports --------------------------------------------------------------------
+
+    def clients_list(self):
+        s = self.need_session()
+        rows = self.app.db.all(
+            "SELECT * FROM clients WHERE user_id = ? ORDER BY name", s["user_id"]
+        )
+        last = {
+            r["cid"]: r
+            for r in self.app.db.all(
+                "SELECT CAST(json_extract(input_json, '$.client') AS INTEGER) AS cid, "
+                "MAX(created_at) AS at, MAX(id) AS id FROM runs WHERE user_id = ? AND "
+                "tool = 'client-reports' AND status = 'ok' GROUP BY cid",
+                s["user_id"],
+            )
+        }
+        self.send_json(
+            200,
+            {
+                "clients": [
+                    {
+                        **{k: r[k] for k in r.keys() if k != "user_id"},
+                        "last_report": last[r["id"]]["at"] if r["id"] in last else None,
+                        "last_report_id": last[r["id"]]["id"] if r["id"] in last else None,
+                    }
+                    for r in rows
+                ]
+            },
+        )
+
+    def client_save(self):
+        s = self.need_session()
+        b = self.body()
+        name = str(b.get("name", "")).strip()[:120]
+        if not name:
+            raise ApiError(400, "Enter the client's name.", field="name")
+        vals = {
+            k: str(b.get(k, "")).strip()[:300]
+            for k in ("website", "contact", "brand", "city", "niche", "notes")
+        }
+        gsc = b.get("gsc_dataset")
+        gsc = int(gsc) if str(gsc or "").isdigit() else None
+        if gsc and not self.app.db.one(
+            "SELECT 1 FROM gsc_datasets WHERE id = ? AND user_id = ?", gsc, s["user_id"]
+        ):
+            raise ApiError(400, "Unknown Search Console report.")
+        cid = b.get("id")
+        if isinstance(cid, int):
+            n = self.app.db.run(
+                "UPDATE clients SET name = ?, website = ?, contact = ?, brand = ?, city = ?, "
+                "niche = ?, notes = ?, gsc_dataset = ? WHERE id = ? AND user_id = ?",
+                name,
+                *vals.values(),
+                gsc,
+                cid,
+                s["user_id"],
+            ).rowcount
+            if not n:
+                raise ApiError(404, "Unknown client.")
+        else:
+            cid = self.app.db.run(
+                "INSERT INTO clients (user_id, name, website, contact, brand, city, niche, notes, "
+                "gsc_dataset, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                s["user_id"],
+                name,
+                *vals.values(),
+                gsc,
+                now(),
+            ).lastrowid
+        self.send_json(200, {"ok": True, "id": cid})
+
+    def client_delete(self):
+        s = self.need_session()
+        cid = self.body().get("id")
+        if not isinstance(cid, int):
+            raise ApiError(400, "Unknown client.")
+        self.app.db.run("DELETE FROM clients WHERE id = ? AND user_id = ?", cid, s["user_id"])
+        self.send_json(200, {"ok": True})
+
+    def gsc_delete(self):
+        s = self.need_session()
+        did = self.body().get("id")
+        if not isinstance(did, int):
+            raise ApiError(400, "Unknown report.")
+        self.app.db.run("DELETE FROM gsc_datasets WHERE id = ? AND user_id = ?", did, s["user_id"])
+        self.app.db.run(
+            "UPDATE clients SET gsc_dataset = NULL WHERE gsc_dataset = ? AND user_id = ?",
+            did,
+            s["user_id"],
+        )
+        self.send_json(200, {"ok": True})
 
     # --- GitHub ---------------------------------------------------------------------------------
 
@@ -1057,11 +1400,21 @@ ROUTES = {
     ("GET", "/api/github/repos"): Handler.github_repos,
     ("POST", "/api/github/import"): Handler.github_import,
     ("GET", "/api/imports"): Handler.imports,
+    ("GET", "/api/leads"): Handler.leads_list,
+    ("POST", "/api/leads/update"): Handler.lead_update,
+    ("POST", "/api/leads/delete"): Handler.lead_delete,
+    ("POST", "/api/leads/import"): Handler.lead_import,
+    ("GET", "/api/leads/export"): Handler.lead_export,
+    ("GET", "/api/clients"): Handler.clients_list,
+    ("POST", "/api/clients/save"): Handler.client_save,
+    ("POST", "/api/clients/delete"): Handler.client_delete,
+    ("POST", "/api/gsc/delete"): Handler.gsc_delete,
     ("POST", "/api/imports/delete"): Handler.import_delete,
 }
 
 PATTERN_ROUTES = [
-    (("POST", re.compile(r"/api/tools/([a-z0-9-]+)/run")), Handler.run_tool),
+    (("POST", re.compile(r"/api/tools/([a-z0-9-]+)/([a-z0-9-]+)/run")), Handler.run_tool),
+    (("GET", re.compile(r"/api/options/([a-z]+)")), Handler.options),
     (("GET", re.compile(r"/api/tools/([a-z0-9-]+)/runs")), Handler.tool_runs),
     (("GET", re.compile(r"/api/tools/([a-z0-9-]+)/stats")), Handler.tool_stats),
     (("GET", re.compile(r"/api/runs/(\d{1,12})")), Handler.run_detail),

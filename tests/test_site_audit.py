@@ -66,7 +66,9 @@ def test_a_well_built_page_passes_every_check():
     # The About panel quotes the count; keep the claim tied to the code.
     from rankloom.tools import BY_SLUG
 
-    assert f"Runs {len(checks)} " in " ".join(BY_SLUG["site-audit"]["does"])
+    page_audit = BY_SLUG["site-audit"]["subtools"][0]
+    assert f"Runs {len(checks)} " in " ".join(page_audit["does"])
+    assert f"{len(checks)} checks" in page_audit["tagline"]
     failing = [c for c in checks.values() if c["status"] != "pass"]
     assert failing == []
     assert result["score"] == 100

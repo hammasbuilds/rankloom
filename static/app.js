@@ -917,6 +917,17 @@
   }
 
   // ---------------------------------------------------------------- Clients
+  // The same market list the tools use, read from the catalog so the two never drift apart.
+  function countryOptions() {
+    for (const t of state.tools || []) {
+      for (const s of t.subtools || []) {
+        const f = (s.fields || []).find((x) => x.name === "country" && x.options && x.options.some((o) => o.value === ""));
+        if (f) return f.options;
+      }
+    }
+    return [{ value: "", label: "Detect from the page" }];
+  }
+
   async function clientsPage(panel) {
     const body = h("div", { class: "loading", text: "Loading clients…" });
     put(panel, body);
@@ -930,11 +941,17 @@
           { name: "name", label: "Client name", required: true },
           { name: "website", label: "Website", type: "url", placeholder: "client.example" },
           { name: "city", label: "City", placeholder: "Lahore" },
+          { name: "country", label: "Country", type: "select", options: countryOptions(),
+            hint: "The client's market: decides the local checks in the report (WhatsApp advice only where it fits)." },
           { name: "niche", label: "Business type", placeholder: "dentist" },
           { name: "contact", label: "Contact", placeholder: "name, email or phone" },
           { name: "brand", label: "Prepared by (shown on the report)", placeholder: "Your agency name" },
           { name: "gsc_dataset", label: "Search Console report", type: "dataset", hint: "Import one under Search Performance → Import Report." },
-          { name: "notes", label: "Notes", type: "textarea" },
+          { name: "work_notes", label: "This month's work (shown first in the report)", type: "textarea",
+            hint: "One line each, in your words: what you did for this client." },
+          { name: "hide_fixes", label: "Leave out of the report", type: "textarea",
+            hint: "Issue names exactly as the report's fix list shows them, one per line." },
+          { name: "notes", label: "Private notes", type: "textarea" },
         ],
         values: c ? { ...c, gsc_dataset: c.gsc_dataset ? String(c.gsc_dataset) : "" } : {},
         submit: c ? "Save client" : "Add client", submitClass: "primary",
@@ -1164,7 +1181,7 @@
 
   async function jrAccelerators(panel) {
     const params = new URLSearchParams(location.search);
-    const f = { programme: params.get("programme") || "", junior: params.get("junior") || "", family: params.get("family") || "", q: params.get("q") || "" };
+    const f = { programme: params.get("programme") || "", junior: params.get("junior") || "", family: params.get("family") || "", country: params.get("country") || "", q: params.get("q") || "" };
     const qs = () => new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
     const d = await jrLoad(panel, `/api/jobradar/portfolio?${qs()}`);
     if (d) {
@@ -1182,6 +1199,11 @@
         const family = h("select", { "aria-label": "Title family" }, h("option", { value: "", text: "Title: any" }),
           d.families.map(([v, n]) => h("option", { value: v, text: `${v} (${n})` })));
         family.value = f.family; family.addEventListener("change", () => { f.family = family.value; rerun(); });
+        const countryOpts = (d.countries || []).map(([v, n]) => [v, `${v} (${n})`]);
+        if (f.country && !countryOpts.some(([v]) => v === f.country)) countryOpts.unshift([f.country, `${f.country} (0)`]);
+        const country = h("select", { "aria-label": "Country" }, h("option", { value: "", text: "Country: any" }),
+          countryOpts.map(([v, l]) => h("option", { value: v, text: l })));
+        country.value = f.country; country.addEventListener("change", () => { f.country = country.value; rerun(); });
         put(panel, 
           h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Portfolios" }), h("p", { text: "Companies each programme backs, read from its job board" })),
             h("div", { class: "chips" }, d.programmes.map((x) => h("button", { type: "button", class: `chip${x.name === d.programme ? " on" : ""}`, onclick: () => { f.programme = x.name; f.q = ""; f.family = ""; rerun(); } },
@@ -1196,16 +1218,21 @@
             `${p.name}'s board lists its companies but not its job titles, so its roles cannot be counted or filtered here. `,
             link(p.board, "Open the board"), " to see them."))] : []),
           h("div", { class: "card" },
-            h("div", { class: "card-head" }, h("h2", { text: `AI roles at ${p.name} companies` }), h("p", { text: "Titles are read from each job's address, which can drop a level word (Staff, Senior) and has no location. Open the role to confirm both." })),
-            h("div", { class: "toolbar wrap" }, search, family, h("label", { class: "check", for: "pf-junior" }, junior, " No senior titles"),
+            h("div", { class: "card-head" }, h("h2", { text: `AI roles at ${p.name} companies` }),
+              h("p", { text: `${d.read.toLocaleString()} roles read from their own job pages (real title, place, salary)${d.gone ? `; ${d.gone} closed jobs hidden` : ""}. The rest show the title from the job's address - open them to confirm level and place.` })),
+            h("div", { class: "toolbar wrap" }, search, family, country, h("label", { class: "check", for: "pf-junior" }, junior, " No senior titles"),
               link(p.board, "Open the board")),
-            d.roles.length ? h("div", { class: "table-wrap" }, h("table", { class: "table" },
-              h("thead", null, h("tr", null, ["Role", "Company", "Title family", "Level"].map((c) => h("th", { text: c })))),
+            d.roles.length ? h("div", { class: "table-wrap" }, h("table", { class: "table cards" },
+              h("thead", null, h("tr", null, ["Role", "Company", "Where", "Salary", "Title family", "Level"].map((c) => h("th", { text: c })))),
               h("tbody", null, d.roles.map((r) => h("tr", null,
-                h("td", null, link(r.url, r.title), r.postings > 1 ? h("div", { class: "muted small-text", text: `${r.postings} postings with this title` }) : null),
-                h("td", { text: r.company }),
-                h("td", null, h("div", { text: r.family }), h("div", { class: "muted small-text", text: r.track })),
-                h("td", null, r.junior ? badge("pass", r.level) : badge("warn", r.level)))))))
+                h("td", null, link(r.url, r.title),
+                  r.postings > 1 ? h("div", { class: "muted small-text", text: `${r.postings} postings with this title` }) : null,
+                  r.posted ? h("div", { class: "muted small-text", text: `posted ${r.posted}` }) : null),
+                h("td", { "data-label": "Company", text: r.company }),
+                h("td", { "data-label": "Where", text: r.read ? (r.countries.join(", ") || "Not stated") : "Not read yet" }),
+                h("td", { "data-label": "Salary", class: "small-text", text: r.salary || "-" }),
+                h("td", { "data-label": "Title" }, h("span", { text: r.family }), h("span", { class: "muted small-text", text: ` · ${r.track}` })),
+                h("td", { "data-label": "Level" }, r.junior ? badge("pass", r.level) : badge("warn", r.level)))))))
               : h("p", { class: "muted", text: "No AI roles match." }),
             ...(d.roles_matched > d.roles.length ? [h("p", { class: "muted small-text", text: `Showing ${d.roles.length} of ${d.roles_matched}. Search to narrow.` })] : [])),
           h("div", { class: "card" },

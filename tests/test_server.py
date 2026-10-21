@@ -708,6 +708,30 @@ def test_clients_and_a_monthly_report(app):
     assert st == 422
 
 
+def test_a_report_keeps_the_agencys_notes_market_and_chosen_omissions(app):
+    from test_site_audit import BAD, fetcher
+
+    app.fetch = fetcher({"https://bad.example/": (200, BAD, {}, "https://bad.example/", [])})
+    c = register(app)
+    st, body, _ = c.post("/api/clients/save", {"name": "Bad Co", "website": "bad.example",
+                                                "country": "us", "work_notes": "- Fixed the title\nSent the GBP checklist"})
+    cid = body["id"]
+    st, body, _ = c.post("/api/tools/client-reports/report/run", {"fields": {"client": str(cid)}})
+    out = body["output"]
+    fix_rows = next(b for b in out["view"]["blocks"] if b.get("title") == "What to fix next")["rows"]
+    first = fix_rows[0][1]
+    assert out["work"][:2] == ["Fixed the title", "Sent the GBP checklist"]  # their words first
+    assert not any("WhatsApp" in r[1] or "wa.me" in r[2] for r in fix_rows)  # a US client
+    c.post("/api/clients/save", {"id": cid, "name": "Bad Co", "website": "bad.example",
+                                 "country": "us", "hide_fixes": first})
+    st, body, _ = c.post("/api/tools/client-reports/report/run", {"fields": {"client": str(cid)}})
+    rows = next(b for b in body["output"]["view"]["blocks"] if b.get("title") == "What to fix next")["rows"]
+    assert first not in [r[1] for r in rows]
+    assert body["output"]["left_out"] == [first] and "left out by choice" in body["summary"]
+    assert c.post("/api/clients/save", {"name": "X", "country": "zz"})[0] == 200  # unknown -> ""
+    assert app.db.one("SELECT country FROM clients WHERE name = 'X'")["country"] == ""
+
+
 def test_a_client_cannot_point_at_someone_elses_report(app):
     a = register(app)
     _, imp, _ = a.post(
@@ -838,3 +862,39 @@ def test_every_html_page_script_and_style_exists(app):
     for ref in refs:
         st, body, headers = c.get(ref, csrf=False)
         assert st == 200 and '<div id="app"' not in str(body), ref
+
+
+def test_an_older_database_gains_the_new_client_and_lead_columns(tmp_path):
+    import sqlite3
+
+    from rankloom.db import Database
+
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.executescript("""
+        CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, name TEXT, pw_hash TEXT,
+                            created_at INTEGER);
+        CREATE TABLE clients (id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT NOT NULL,
+          website TEXT NOT NULL DEFAULT '', contact TEXT NOT NULL DEFAULT '',
+          brand TEXT NOT NULL DEFAULT '', city TEXT NOT NULL DEFAULT '',
+          niche TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '', gsc_dataset INTEGER,
+          created_at INTEGER NOT NULL);
+        INSERT INTO users (id, email, name, pw_hash, created_at) VALUES (1, 'a@b.co', 'A', 'x', 0);
+        INSERT INTO clients (user_id, name, created_at) VALUES (1, 'Old client', 0);
+        CREATE TABLE leads (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, name TEXT NOT NULL,
+          category TEXT NOT NULL DEFAULT '', website TEXT NOT NULL DEFAULT '',
+          phone TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '',
+          address TEXT NOT NULL DEFAULT '', city TEXT NOT NULL DEFAULT '',
+          source TEXT NOT NULL DEFAULT '', score INTEGER, problems TEXT NOT NULL DEFAULT '[]',
+          status TEXT NOT NULL DEFAULT 'new', notes TEXT NOT NULL DEFAULT '',
+          created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+          UNIQUE(user_id, name, website));
+        INSERT INTO leads (user_id, name, created_at, updated_at) VALUES (1, 'Kept lead', 0, 0);
+        INSERT INTO leads (user_id, name, created_at, updated_at) VALUES (99, 'Orphan', 0, 0);
+    """)
+    conn.commit()
+    conn.close()
+    db = Database(path)
+    row = db.one("SELECT name, country, work_notes, hide_fixes FROM clients")
+    assert tuple(row) == ("Old client", "", "", "")
+    assert db.one("SELECT name, branch FROM leads")["name"] == "Kept lead"

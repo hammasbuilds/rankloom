@@ -360,3 +360,29 @@ def test_a_crawl_runs_job_radars_script_once_at_a_time(radar, app):  # noqa: F81
     state = app.crawler.state()
     assert state["exit"] == 0 and state["log"][-1] == "done"
     assert app.crawler.python() == sys.executable or app.crawler.python().endswith("python.exe")
+
+
+def test_a_jobs_own_page_outranks_its_address_and_closed_jobs_go(radar):
+    conn = sqlite3.connect(radar / "data" / "radar.sqlite3")
+    conn.executescript("""
+        CREATE TABLE portfolio_detail (url TEXT PRIMARY KEY, title TEXT, locations TEXT,
+          countries TEXT, remote INT, posted TEXT, salary TEXT, years INT, level TEXT,
+          junior INT, gone INT, at TEXT);
+        INSERT INTO portfolio_detail VALUES ('https://j/2', 'Staff Computer Vision Engineer',
+          '["Singapore"]', '["Singapore"]', 0, '2026-10-01', 'SGD 9,000-12,000 / month', NULL,
+          'staff', 0, 0, 't');
+        INSERT INTO portfolio_detail VALUES ('https://j/1', NULL, '[]', '[]', 0, NULL, NULL,
+          NULL, NULL, NULL, 1, 't');
+    """)
+    conn.commit()
+    conn.close()
+    p = jr.portfolio({})
+    assert [r["title"] for r in p["roles"]] == ["Staff Computer Vision Engineer"]  # j/1 is gone
+    role = p["roles"][0]
+    assert role["junior"] == 0 and role["countries"] == ["Singapore"]
+    assert role["salary"].startswith("SGD") and p["gone"] == 1 and p["read"] == 1
+    assert jr.portfolio({"junior": "1"})["roles"] == []  # its page says Staff
+    assert dict(map(tuple, p["countries"])) == {"Singapore": 1}
+    assert [r["title"] for r in jr.portfolio({"country": "Singapore"})["roles"]] == [
+        "Staff Computer Vision Engineer"
+    ]

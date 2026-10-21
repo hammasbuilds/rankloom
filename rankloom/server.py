@@ -1211,6 +1211,14 @@ class Handler(BaseHTTPRequestHandler):
             k: str(b.get(k, "")).strip()[:300]
             for k in ("website", "contact", "brand", "city", "niche", "notes")
         }
+        from .engines import market
+
+        country = str(b.get("country", "")).strip().lower()
+        extra = {
+            "country": country if country in market.NAMES else "",
+            "work_notes": str(b.get("work_notes", "")).strip()[:4000],
+            "hide_fixes": str(b.get("hide_fixes", "")).strip()[:4000],
+        }
         gsc = b.get("gsc_dataset")
         gsc = int(gsc) if str(gsc or "").isdigit() else None
         if gsc and not self.app.db.one(
@@ -1221,10 +1229,12 @@ class Handler(BaseHTTPRequestHandler):
         if isinstance(cid, int):
             n = self.app.db.run(
                 "UPDATE clients SET name = ?, website = ?, contact = ?, brand = ?, city = ?, "
-                "niche = ?, notes = ?, gsc_dataset = ? WHERE id = ? AND user_id = ?",
+                "niche = ?, notes = ?, gsc_dataset = ?, country = ?, work_notes = ?, "
+                "hide_fixes = ? WHERE id = ? AND user_id = ?",
                 name,
                 *vals.values(),
                 gsc,
+                *extra.values(),
                 cid,
                 s["user_id"],
             ).rowcount
@@ -1233,12 +1243,14 @@ class Handler(BaseHTTPRequestHandler):
         else:
             cid = self.app.db.run(
                 "INSERT INTO clients (user_id, name, website, contact, brand, city, niche, notes, "
-                "gsc_dataset, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "gsc_dataset, created_at, country, work_notes, hide_fixes) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 s["user_id"],
                 name,
                 *vals.values(),
                 gsc,
                 now(),
+                *extra.values(),
             ).lastrowid
         self.send_json(200, {"ok": True, "id": cid})
 

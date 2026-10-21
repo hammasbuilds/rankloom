@@ -107,7 +107,10 @@ def build(client: dict, ctx: Context) -> dict:
         )
     else:
         try:
-            sections["local"] = local_seo.audit(site, client.get("city", ""), ctx.fetch)
+            # The client's market decides the local checks (WhatsApp advice only where it fits).
+            sections["local"] = local_seo.audit(
+                site, client.get("city", ""), ctx.fetch, country=client.get("country") or ""
+            )
         except (FetchFailed, FetchRefused):
             pass
         try:
@@ -146,7 +149,9 @@ def build(client: dict, ctx: Context) -> dict:
         ):
             if r["tool"] != "client-reports":
                 runs.append({**dict(r), "input": inp})
-    sections["work"] = work_log(runs)[:25]
+    # The agency's own account of the month comes first; the run log only backs it up.
+    notes = [ln.strip(" -•\t") for ln in (client.get("work_notes") or "").splitlines()]
+    sections["work"] = [ln for ln in notes if ln] + work_log(runs)[:25]
     return sections
 
 
@@ -183,6 +188,11 @@ def run_report(fields: dict, ctx: Context):
                     fix = f"Speed {SPEED_CAVEAT}. {fix}"
                 fixes.append((c["status"], c["weight"], c["label"], fix))
     fixes.sort(key=lambda f: (f[0] != FAIL, -f[1]))
+    # Fixes the agency chose to leave out (it knows the client: a fix already agreed, or one it
+    # does not offer). Matched on the issue name as the report shows it.
+    hidden = {ln.strip().lower() for ln in (client.get("hide_fixes") or "").splitlines() if ln.strip()}
+    left_out = [f for f in fixes if f[2].lower() in hidden]
+    fixes = [f for f in fixes if f[2].lower() not in hidden]
     gsc = s.get("gsc")
     gsc_block = None
     if gsc:
@@ -238,4 +248,6 @@ def run_report(fields: dict, ctx: Context):
         ),
         bullets("Could not check", [s["audit_error"]]) if s.get("audit_error") else None,
     )
-    return f"Monthly report for {client['name']}", score, s
+    s["left_out"] = [label for _, _, label, _ in left_out]
+    note = f" ({len(left_out)} fix{'es' if len(left_out) != 1 else ''} left out by choice)" if left_out else ""
+    return f"Monthly report for {client['name']}{note}", score, s

@@ -258,17 +258,19 @@ def portfolio(f: dict) -> dict:
         names = [p["name"] for p in programmes]
         name = f.get("programme") if f.get("programme") in names else (names[0] if names else "")
         q = f"%{(f.get('q') or '').strip().lower()}%"
-        # One row per company and title: big employers post the same title once per city.
-        roles_sql = (
-            "SELECT company, title, MIN(url) AS url, MAX(junior) AS junior, family, track, level,"
-            " COUNT(*) AS postings FROM portfolio_job WHERE programme = ? AND ai = 1"
-            + (" AND junior = 1" if f.get("junior") == "1" else "")
-            + (" AND family = ?" if f.get("family") else "")
-            + " AND lower(title || ' ' || company) LIKE ?"
-            " GROUP BY company, title ORDER BY junior DESC, company, title"
-        )
-        args = (name, f["family"], q) if f.get("family") else (name, q)
-        roles = [dict(r) for r in conn.execute(roles_sql, args)]
+        # The job's own page, where job-radar has read it, outranks the address: it has the
+        # real title (with "Staff" or "Senior"), the places, the salary - and says when a
+        # job is gone. Older job-radar databases have no detail table; then the address is all.
+        detail = "portfolio_detail" in _tables(conn)
+        cols = ("d.title AS page_title, d.countries, d.locations, d.salary, d.posted, "
+                "d.junior AS d_junior, d.gone" if detail else
+                "NULL AS page_title, NULL AS countries, NULL AS locations, NULL AS salary, "
+                "NULL AS posted, NULL AS d_junior, 0 AS gone")
+        join = " LEFT JOIN portfolio_detail d ON d.url = j.url" if detail else ""
+        raw = [dict(r) for r in conn.execute(
+            f"SELECT j.company, j.title AS slug_title, j.url, j.junior AS j_junior, j.family, "
+            f"j.track, j.level, {cols} FROM portfolio_job j{join} "
+            "WHERE j.programme = ? AND j.ai = 1", (name,))]
         families = conn.execute(
             "SELECT family, COUNT(*) FROM portfolio_job WHERE programme = ? AND ai = 1 "
             "GROUP BY family ORDER BY COUNT(*) DESC",
@@ -284,10 +286,52 @@ def portfolio(f: dict) -> dict:
         ]
     finally:
         conn.close()
+    needle = q.strip("%")
+    grouped: dict[tuple, dict] = {}
+    country_counts: dict[str, int] = {}
+    gone = 0
+    for r in raw:
+        if r["gone"]:
+            gone += 1
+            continue
+        title = r["page_title"] or r["slug_title"]
+        junior = r["d_junior"] if r["d_junior"] is not None else r["j_junior"]
+        countries = json.loads(r["countries"] or "[]")
+        places = json.loads(r["locations"] or "[]")
+        if f.get("junior") == "1" and not junior:
+            continue
+        if f.get("family") and r["family"] != f["family"]:
+            continue
+        if needle and needle not in f"{title} {r['company']} {' '.join(places)}".lower():
+            continue
+        for c in countries or (["Not read yet"] if r["page_title"] is None else ["Not stated"]):
+            country_counts[c] = country_counts.get(c, 0) + 1
+        if f.get("country"):
+            want = f["country"]
+            if want == "Not read yet":
+                if r["page_title"] is not None:
+                    continue
+            elif want not in countries:
+                continue
+        g = grouped.setdefault((r["company"], title), {
+            "company": r["company"], "title": title, "url": r["url"], "junior": 0,
+            "family": r["family"], "track": r["track"], "level": r["level"], "postings": 0,
+            "countries": [], "salary": r["salary"] or "", "posted": r["posted"] or "",
+            "read": r["page_title"] is not None})
+        g["postings"] += 1
+        g["junior"] = max(g["junior"], int(junior or 0))
+        for c in countries:
+            if c not in g["countries"]:
+                g["countries"].append(c)
+        g["posted"] = max(g["posted"], r["posted"] or "")
+    roles = sorted(grouped.values(), key=lambda g: (-g["junior"], g["company"], g["title"]))
     return {
         "programmes": programmes,
         "programme": name,
         "families": [list(r) for r in families],
+        "countries": sorted(country_counts.items(), key=lambda kv: (-kv[1], kv[0])),
+        "gone": gone,
+        "read": sum(1 for r in raw if r["page_title"] is not None),
         "roles": roles[: LIMIT * 2],
         "roles_matched": len(roles),
         "companies": companies[: LIMIT * 2],

@@ -120,7 +120,12 @@ CREATE TABLE IF NOT EXISTS clients (
     niche       TEXT NOT NULL DEFAULT '',
     notes       TEXT NOT NULL DEFAULT '',
     gsc_dataset INTEGER,
-    created_at  INTEGER NOT NULL
+    created_at  INTEGER NOT NULL,
+    -- The client's market (ISO code, '' = read it from the site), the agency's own words for
+    -- the month's work, and the fixes it chose to leave out of the report (one per line).
+    country     TEXT NOT NULL DEFAULT '',
+    work_notes  TEXT NOT NULL DEFAULT '',
+    hide_fixes  TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS outbox (
     id          INTEGER PRIMARY KEY,
@@ -151,15 +156,22 @@ class Database:
             c.executescript(SCHEMA)
             if rebuilt:
                 cols = ", ".join(rebuilt)
-                c.execute(f"INSERT INTO leads ({cols}) SELECT {cols} FROM leads_v1")
-                c.execute("DROP TABLE leads_v1")
+                # A copy, not a check: a lead left behind by a deleted user must not stop the
+                # server from starting. Foreign keys are back on before anything else runs.
+                c.execute("PRAGMA foreign_keys = OFF")
+                try:
+                    c.execute(f"INSERT INTO leads ({cols}) SELECT {cols} FROM leads_v1")
+                    c.execute("DROP TABLE leads_v1")
+                finally:
+                    c.execute("PRAGMA foreign_keys = ON")
                 c.executescript(SCHEMA)  # indexes that went with the old table
 
     @staticmethod
     def _migrate(c: sqlite3.Connection) -> list[str]:
         """Columns added after a database was first created. Returns the lead columns to copy
         when the leads table had to be rebuilt for its new unique key."""
-        for table, column in (("runs", "subtool"), ("events", "subtool")):
+        for table, column in (("runs", "subtool"), ("events", "subtool"), ("clients", "country"),
+                              ("clients", "work_notes"), ("clients", "hide_fixes")):
             cols = {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
             if cols and column not in cols:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")

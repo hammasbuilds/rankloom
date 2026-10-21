@@ -2,8 +2,8 @@
 
 A growth workspace for selling SEO and AI-visibility work to small businesses: find the
 businesses that need help, audit their sites, show them whether AI assistants recommend them,
-do the monthly content work, and send a report that shows the result. Six tools, each with its
-own sub-tools, one account, and every tool or sub-tool openable in a window of its own so
+do the monthly content work, and send a report that shows the result - plus Job Radar, a job
+search for junior AI roles. Seven tools, each with its own sub-tools (25 in all), one account, and every tool or sub-tool openable in a window of its own so
 several can sit side by side.
 
 ![Overview](docs/overview.png)
@@ -30,8 +30,8 @@ Check and Draft Writer - run once an AI engine is configured, and say so until t
 the job-radar folder (default `D:/github/job-radar`). Jobs filter by country, region, title
 family (ML/DL, machine learning, deep learning, computer vision, generative AI, agentic AI),
 engineer or researcher, onsite / hybrid / remote, full-time / contract / small contract, and
-experience (junior only: at most two years), with a per-country chip row and an "open to me from
-Pakistan" switch.
+experience (junior only: at most two years), with a per-country chip row, an "Only roles with a way in from Pakistan" switch and a switch
+that hides roles asking for a PhD or extensive experience.
 
 ## Where the data comes from
 
@@ -175,7 +175,7 @@ error or Content-Security-Policy refusal, and writes the screenshots above.
 ```
 rankloom/
   server.py        HTTP server, routes, accounts, runs, analytics, leads, clients
-  tools.py         the six tools and their sub-tools: about, fields, status
+  tools.py         the seven tools and their sub-tools: about, fields, status
   engines/         one module per tool; common.py is the result format every page renders
   sources.py       autocomplete and OpenStreetMap
   ai.py            the AI engine adapter

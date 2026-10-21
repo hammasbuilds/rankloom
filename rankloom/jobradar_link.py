@@ -125,6 +125,9 @@ def jobs(f: dict) -> dict:
         r["countries"] = json.loads(r["countries"] or "[]")
         r["regions"] = json.loads(r["regions"] or "[]")
         r["route_kind"] = route_kind(r["route"])
+        # What the posting asks in words ("PhD required", "extensive experience"); older
+        # job-radar databases have no such column.
+        r["bar"] = [b for b in (r.get("bar") or "").split(",") if b]
         r["reachable"] = r["route_kind"] in ("open", "pass")
     q = (f.get("q") or "").lower().strip()
 
@@ -147,6 +150,8 @@ def jobs(f: dict) -> dict:
         if skip != "years" and not _years_ok(r["years"], f.get("years", "")):
             return False
         if f.get("reachable") == "1" and not r["reachable"]:
+            return False
+        if f.get("open_bar") == "1" and r["bar"]:
             return False
         if q and q not in f"{r['title']} {r['company']} {r['location']} {r['excerpt']}".lower():
             return False

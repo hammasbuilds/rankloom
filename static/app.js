@@ -1017,7 +1017,7 @@
   async function jrJobs(panel) {
     const params = new URLSearchParams(location.search);
     const f = Object.fromEntries(JR_FILTERS.map(([k]) => [k, params.get(k) || ""]));
-    f.q = params.get("q") || ""; f.reachable = params.get("reachable") || "";
+    f.q = params.get("q") || ""; f.reachable = params.get("reachable") || ""; f.open_bar = params.get("open_bar") || "";
     const qs = () => new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
     const d = await jrLoad(panel, `/api/jobradar/jobs?${qs()}`);
     if (!d) return;
@@ -1039,6 +1039,9 @@
     const reach = h("input", { type: "checkbox", id: "jr-reach" });
     reach.checked = f.reachable === "1";
     reach.addEventListener("change", () => { f.reachable = reach.checked ? "1" : ""; rerun(); });
+    const openBar = h("input", { type: "checkbox", id: "jr-bar" });
+    openBar.checked = f.open_bar === "1";
+    openBar.addEventListener("change", () => { f.open_bar = openBar.checked ? "1" : ""; rerun(); });
     const chips = h("div", { class: "chips collapsible" }, d.facets.country.slice(0, 40).map(([c, n]) =>
       h("button", { type: "button", class: `chip${f.country === c ? " on" : ""}`, onclick: () => { f.country = f.country === c ? "" : c; rerun(); } },
         c, h("span", { text: String(n) }))));
@@ -1054,7 +1057,7 @@
       return badge("fail", r.route);
     };
     const labels = Object.fromEntries(JR_FILTERS);
-    const active = Object.entries(f).filter(([k, v]) => v && k !== "reachable").map(([k, v]) =>
+    const active = Object.entries(f).filter(([k, v]) => v && k !== "reachable" && k !== "open_bar").map(([k, v]) =>
       h("button", { type: "button", class: "chip on removable", "aria-label": `Remove filter ${labels[k] || "Search"}: ${v}`,
         onclick: () => { f[k] = ""; rerun(); } }, `${labels[k] || "Search"}: ${(JR_FIXED[k] || []).find(([x]) => x === v)?.[1] || v}`));
     put(panel, 
@@ -1068,6 +1071,7 @@
       h("div", { class: "card" },
         h("div", { class: "toolbar wrap" }, search, ...selects,
           h("label", { class: "check", for: "jr-reach" }, reach, " Only roles with a way in from Pakistan"),
+          h("label", { class: "check", for: "jr-bar" }, openBar, " Hide roles asking for a PhD or extensive experience"),
           h("button", { class: "btn small ghost", type: "button", onclick: () => { for (const k of Object.keys(f)) f[k] = ""; rerun(); } }, "Clear filters")),
         active.length ? h("div", { class: "active-filters" }, h("span", { class: "muted small-text", text: "Filtering by:" }), active) : null,
         d.rows.length ? h("div", { class: "table-wrap" }, h("table", { class: "table jobs cards" },
@@ -1078,7 +1082,8 @@
             h("td", { "data-label": "Country", text: r.countries.join(", ") || "Not stated" }),
             h("td", { "data-label": "Title" }, h("span", { text: r.family }), h("span", { class: "muted small-text", text: ` · ${r.track}` })),
             h("td", { "data-label": "Place", text: r.workplace }), h("td", { "data-label": "Terms", text: r.terms }),
-            h("td", { "data-label": "Experience", text: r.years === null ? "Not stated" : `${r.years} yr` }),
+            h("td", { "data-label": "Experience" }, h("span", { text: r.years === null ? "Not stated" : `${r.years} yr` }),
+              (r.bar || []).map((b) => h("div", { class: "muted small-text", text: b === "phd" ? "PhD required" : "asks for extensive experience" }))),
             h("td", { "data-label": "Route" }, route(r)),
             h("td", { class: "muted nowrap", "data-label": "Posted", text: r.posted ? r.posted.slice(0, 10) : "" }))))))
           : h("p", { class: "muted", text: "No roles match these filters." }),

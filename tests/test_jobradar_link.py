@@ -38,6 +38,7 @@ def lens_row(i, **kw):
         score=0.8,
         excerpt="",
         at="2026-10-20",
+        bar="",
     )
     base.update(kw)
     base["countries"] = json.dumps(base["countries"])
@@ -63,7 +64,7 @@ def build(home):
         CREATE TABLE lens (id TEXT PRIMARY KEY, source TEXT, company TEXT, title TEXT,
           location TEXT, url TEXT, posted TEXT, family TEXT, track TEXT, countries TEXT,
           regions TEXT, workplace TEXT, terms TEXT, years INTEGER, level TEXT, route TEXT,
-          auth TEXT, score REAL, excerpt TEXT, at TEXT);
+          auth TEXT, score REAL, excerpt TEXT, at TEXT, bar TEXT);
         CREATE TABLE directory (kind TEXT, name TEXT, url TEXT, jobs_url TEXT, region TEXT,
           what TEXT, pay TEXT, pay_source TEXT, who TEXT, match TEXT, live INTEGER, at TEXT);
         CREATE TABLE yc_recent (slug TEXT PRIMARY KEY, name TEXT, batch TEXT, batch_year INT,
@@ -386,3 +387,13 @@ def test_a_jobs_own_page_outranks_its_address_and_closed_jobs_go(radar):
     assert [r["title"] for r in jr.portfolio({"country": "Singapore"})["roles"]] == [
         "Staff Computer Vision Engineer"
     ]
+
+
+def test_roles_asking_for_a_phd_or_experience_can_be_hidden(radar):
+    conn = sqlite3.connect(radar / "data" / "radar.sqlite3")
+    conn.execute("UPDATE lens SET bar = 'phd' WHERE company = 'Grab'")
+    conn.commit()
+    conn.close()
+    rows = {r["company"]: r for r in jr.jobs({})["rows"]}
+    assert rows["Grab"]["bar"] == ["phd"] and rows["Acme"]["bar"] == []
+    assert "Grab" not in {r["company"] for r in jr.jobs({"open_bar": "1"})["rows"]}
